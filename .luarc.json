@@ -1,0 +1,7 @@
+{
+  "runtime.version": "LuaJIT",
+  "diagnostics.globals": ["vim"],
+  "diagnostics.disable": ["missing-fields", "assign-type-mismatch"],
+  "workspace.library": ["${3rd}/luv/library"],
+  "workspace.checkThirdParty": false
+}

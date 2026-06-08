@@ -1,0 +1,40 @@
+name: test
+
+on:
+  push:
+    branches: [master, dev]
+  pull_request:
+    branches: [master, dev]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: stable
+
+      - name: Cache plugins
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/nvim/lazy
+          key: ${{ runner.os }}-nvim-lazy-${{ hashFiles('**/lazy-lock.json') }}
+
+      - name: Install plugins
+        run: |
+          mkdir -p ~/.local/share/nvim/lazy
+          if [ ! -d ~/.local/share/nvim/lazy/plenary.nvim ]; then
+            git clone --depth 1 https://github.com/nvim-lua/plenary.nvim \
+              ~/.local/share/nvim/lazy/plenary.nvim
+          fi
+          if [ ! -d ~/.local/share/nvim/lazy/volt ]; then
+            git clone --depth 1 https://github.com/nvzone/volt \
+              ~/.local/share/nvim/lazy/volt
+          fi
+
+      - name: Run tests
+        run: make test
