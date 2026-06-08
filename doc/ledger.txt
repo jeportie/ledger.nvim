@@ -1,0 +1,94 @@
+*ledger.txt*    Ledger Live QA Automation suite for Neovim
+
+==============================================================================
+CONTENTS                                                      *ledger-contents*
+
+  1. Introduction ............................. |ledger-introduction|
+  2. Setup .................................... |ledger-setup|
+  3. Jira ..................................... |ledger-jira|
+  4. Xray ..................................... |ledger-xray|
+  5. Detox / Playwright ....................... |ledger-detox|
+  6. Boards ................................... |ledger-boards|
+  7. Commands ................................. |ledger-commands|
+  8. Keymaps .................................. |ledger-keymaps|
+
+==============================================================================
+1. INTRODUCTION                                           *ledger-introduction*
+
+ledger.nvim is a Neovim plugin suite for QA Automation engineers working on
+the LedgerHQ/ledger-live monorepo. It bundles:
+
+  - Jira board for the QAA project (kanban with epic banding)
+  - Xray ticket browser + coverage scanner for B2CQA tests
+  - Detox + Playwright neotest integration with Speculos awareness
+  - (planned) Builder, PR, GitHub Actions, Allure, Test Summary boards
+  - (planned) Ledger env profiles, process monitor, triage helper
+
+==============================================================================
+2. SETUP                                                         *ledger-setup*
+
+Requires Neovim 0.10+, plenary, nvzone/volt and nvzone/menu.
+
+>lua
+  require("ledger").setup({
+    jira = { project_key = "QAA", board_name = "Team QA Automation" },
+    xray = { project_key = "B2CQA" },
+    monorepo_root = "~/src/ledger-live",
+  })
+<
+
+Environment:
+  JIRA_EMAIL, JIRA_API_TOKEN, JIRA_URL  for Jira/Xray
+  COINAPPS                              path to Speculos coin apps
+  SEED                                  E2E test seed (or use macOS Keychain
+                                        item `ledger-e2e-seed`)
+
+==============================================================================
+3. JIRA                                                           *ledger-jira*
+
+`<leader>Lj` opens the kanban board for the configured QAA project.
+
+Board keymaps: see :h ledger-jira-board.
+
+==============================================================================
+4. XRAY                                                           *ledger-xray*
+
+`<leader>fx` opens the Xray ticket picker for B2CQA tests.
+`<leader>xc` runs the coverage scanner (rg over the ledger-live repo).
+`K` on a B2CQA-XXXX word triggers the Xray hover popup.
+
+==============================================================================
+5. DETOX / PLAYWRIGHT                                            *ledger-detox*
+
+Neotest adapters configured for:
+  - apps/ledger-live-desktop Playwright suites (in-app + e2e/desktop)
+  - apps/ledger-live-mobile Detox suites (in-app + e2e/mobile)
+
+User commands:
+  :NeotestDetoxPlatform   pick iOS / Android / Both
+  :NeotestDetoxBuild      build the active Detox configuration
+  :NeotestDetoxMetro      toggle the Metro bundler split
+  :NeotestSmartRun        smart run with platform pre-checks
+
+==============================================================================
+6. BOARDS                                                       *ledger-boards*
+
+(planned)
+
+  <leader>Lb  Builder board   long-running infra (Metro, Speculos, builds)
+  <leader>Lp  PR board        pull requests
+  <leader>Lg  Actions board   GitHub Actions runs
+  <leader>La  Allure board    test outcomes with flaky tracking
+  <leader>Lt  Test Summary    test executions, tied to Builder
+
+==============================================================================
+7. COMMANDS                                                   *ledger-commands*
+
+(documented per module above)
+
+==============================================================================
+8. KEYMAPS                                                     *ledger-keymaps*
+
+(documented per module above)
+
+vim:tw=78:ts=8:noet:ft=help:norl:
