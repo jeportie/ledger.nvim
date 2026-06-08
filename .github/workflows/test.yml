@@ -24,13 +24,17 @@ jobs:
           path: ~/.local/share/nvim/lazy
           key: ${{ runner.os }}-nvim-lazy-${{ hashFiles('**/lazy-lock.json') }}
 
-      - name: Install plenary
+      - name: Install plugins
         run: |
           mkdir -p ~/.local/share/nvim/lazy
-          git clone --depth 1 https://github.com/nvim-lua/plenary.nvim \
-            ~/.local/share/nvim/lazy/plenary.nvim
-          git clone --depth 1 https://github.com/nvzone/volt \
-            ~/.local/share/nvim/lazy/volt
+          if [ ! -d ~/.local/share/nvim/lazy/plenary.nvim ]; then
+            git clone --depth 1 https://github.com/nvim-lua/plenary.nvim \
+              ~/.local/share/nvim/lazy/plenary.nvim
+          fi
+          if [ ! -d ~/.local/share/nvim/lazy/volt ]; then
+            git clone --depth 1 https://github.com/nvzone/volt \
+              ~/.local/share/nvim/lazy/volt
+          fi
 
       - name: Run tests
         run: make test
