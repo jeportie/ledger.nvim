@@ -87,7 +87,7 @@ Legend: ✅ available · 🚧 in development · 📋 planned · numbers in brack
 ### Jira & Xray ticket management
 
 #### Jira board — `<leader>jb` ✅
-
+<img width="1386" height="1083" alt="Screenshot 2026-06-08 at 15 50 20" src="https://github.com/user-attachments/assets/f68751f8-9836-407b-b6eb-bc2eaf33fe76" />
 A floating kanban window for the QAA project, grouped by **epic bands** with collapsible groups and a sticky winbar showing the active filter chips. Cards display: ticket key, summary, status icon, priority, assignee avatar, labels.
 
 **In-board keymaps:**
