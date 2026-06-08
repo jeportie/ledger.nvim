@@ -5,28 +5,39 @@ local volt = require("volt")
 local hl = require("ledger.jira.board.ui.hl")
 local jutil = require("ledger.jira.util")
 
-local function dw(s) return vim.fn.strdisplaywidth(s or "") end
+local function dw(s)
+  return vim.fn.strdisplaywidth(s or "")
+end
 
 local KEYS = {
-  { "Navigation", {
-    { "Tab",         "toggle focus between left / right section" },
-    { "j / k",       "next / prev editable field on current side" },
-    { "arrows",      "same as j / k" },
-    { "<LeftMouse>", "click field (edit) / row (drill in)" },
-  } },
-  { "Actions", {
-    { "<CR>",   "activate focused field" },
-    { "b",      "open ticket in browser" },
-    { "y",      "yank ticket key" },
-    { "m",      "assign to me" },
-    { "a",      "assign to someone…" },
-    { "t",      "transition status" },
-  } },
-  { "Window", {
-    { "?",        "this help" },
-    { "q / <Esc>","close preview" },
-    { "p",        "close preview" },
-  } },
+  {
+    "Navigation",
+    {
+      { "Tab", "toggle focus between left / right section" },
+      { "j / k", "next / prev editable field on current side" },
+      { "arrows", "same as j / k" },
+      { "<LeftMouse>", "click field (edit) / row (drill in)" },
+    },
+  },
+  {
+    "Actions",
+    {
+      { "<CR>", "activate focused field" },
+      { "b", "open ticket in browser" },
+      { "y", "yank ticket key" },
+      { "m", "assign to me" },
+      { "a", "assign to someone…" },
+      { "t", "transition status" },
+    },
+  },
+  {
+    "Window",
+    {
+      { "?", "this help" },
+      { "q / <Esc>", "close preview" },
+      { "p", "close preview" },
+    },
+  },
 }
 
 local _state = { buf = nil, win = nil, ns = nil }
@@ -44,7 +55,9 @@ end
 
 local function build_lines(inner_w)
   local lines = {}
-  local function row(segs) table.insert(lines, segs) end
+  local function row(segs)
+    table.insert(lines, segs)
+  end
 
   local title = "Preview — Keymaps"
   local tpad = math.floor((inner_w - dw(title)) / 2)
@@ -72,7 +85,9 @@ local function build_lines(inner_w)
       local desc = entry[2]
       local chip = " " .. keystr .. " "
       local mid = inner_w - 4 - dw(chip) - dw(desc)
-      if mid < 1 then mid = 1 end
+      if mid < 1 then
+        mid = 1
+      end
       row({
         { "  ", "JiraBoardNormal" },
         { chip, "JiraBoardKeyChip" },
@@ -89,7 +104,8 @@ end
 
 function M.toggle()
   if _state.win and api.nvim_win_is_valid(_state.win) then
-    close(); return
+    close()
+    return
   end
 
   local inner_w = 52
@@ -105,9 +121,13 @@ function M.toggle()
 
   local buf = api.nvim_create_buf(false, true)
   local win = api.nvim_open_win(buf, true, {
-    relative = "editor", row = row, col = col,
-    width = w, height = h,
-    style = "minimal", border = "single",
+    relative = "editor",
+    row = row,
+    col = col,
+    width = w,
+    height = h,
+    style = "minimal",
+    border = "single",
     zindex = 200,
   })
   jutil.clean_float_window(win)
@@ -118,11 +138,18 @@ function M.toggle()
   hl.define(ns)
   api.nvim_win_set_hl_ns(win, ns)
   api.nvim_set_hl(ns, "FloatBorder", { link = "JiraBoardBorder" })
-  api.nvim_set_hl(ns, "Normal",      { link = "JiraBoardNormal" })
+  api.nvim_set_hl(ns, "Normal", { link = "JiraBoardNormal" })
 
-  _state.buf = buf; _state.win = win; _state.ns = ns
+  _state.buf = buf
+  _state.win = win
+  _state.ns = ns
 
-  local layout = { { name = "body", lines = function() return lines end } }
+  local layout = { {
+    name = "body",
+    lines = function()
+      return lines
+    end,
+  } }
   volt.gen_data({ { buf = buf, xpad = 0, layout = layout, ns = ns } })
   volt.set_empty_lines(buf, inner_h, w)
   volt.run(buf, { h = inner_h, w = w })
@@ -130,12 +157,16 @@ function M.toggle()
   local function map(lhs)
     vim.keymap.set("n", lhs, close, { buffer = buf, nowait = true, silent = true })
   end
-  map("q"); map("<Esc>"); map("?")
+  map("q")
+  map("<Esc>")
+  map("?")
   local function noop(lhs)
     vim.keymap.set("n", lhs, function() end, { buffer = buf, nowait = true, silent = true })
   end
-  noop("<ScrollWheelUp>"); noop("<ScrollWheelDown>")
-  noop("<ScrollWheelLeft>"); noop("<ScrollWheelRight>")
+  noop("<ScrollWheelUp>")
+  noop("<ScrollWheelDown>")
+  noop("<ScrollWheelLeft>")
+  noop("<ScrollWheelRight>")
 end
 
 return M

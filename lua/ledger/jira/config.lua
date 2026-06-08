@@ -17,7 +17,9 @@ end
 
 local function env(key)
   local v = vim.env[key]
-  if v == nil or v == "" then return nil end
+  if v == nil or v == "" then
+    return nil
+  end
   return v
 end
 
@@ -27,9 +29,15 @@ function M.credentials()
   local url = env(M.options.env.url)
 
   local missing = {}
-  if not email then table.insert(missing, M.options.env.email) end
-  if not token then table.insert(missing, M.options.env.token) end
-  if not url then table.insert(missing, M.options.env.url) end
+  if not email then
+    table.insert(missing, M.options.env.email)
+  end
+  if not token then
+    table.insert(missing, M.options.env.token)
+  end
+  if not url then
+    table.insert(missing, M.options.env.url)
+  end
 
   if #missing > 0 then
     return nil, "jira: missing env var(s): " .. table.concat(missing, ", ")

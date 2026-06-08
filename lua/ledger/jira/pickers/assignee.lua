@@ -10,8 +10,10 @@ local _state = nil
 local function fresh_state()
   return {
     key = nil,
-    prompt_buf = nil, prompt_win = nil,
-    results_buf = nil, results_win = nil,
+    prompt_buf = nil,
+    prompt_win = nil,
+    results_buf = nil,
+    results_win = nil,
     ns = nil,
     closed = false,
     search_token = 0,
@@ -32,7 +34,9 @@ local function is_open()
 end
 
 local function do_close(restore)
-  if not _state or _state.closed then return end
+  if not _state or _state.closed then
+    return
+  end
   _state.closed = true
   local parent_win = _state.parent_win
   for _, id in ipairs(_state.autocmds) do
@@ -54,11 +58,15 @@ local function do_close(restore)
 end
 
 local function cancel_and_close(restore)
-  if not _state then return end
+  if not _state then
+    return
+  end
   local on_done = _state.on_done
   _state.on_done = nil
   do_close(restore)
-  if on_done then pcall(on_done, nil, nil) end
+  if on_done then
+    pcall(on_done, nil, nil)
+  end
 end
 
 local function build_entries()
@@ -105,7 +113,9 @@ local function format_entry(e)
 end
 
 local function render_results()
-  if not _state.results_buf or not vim.api.nvim_buf_is_valid(_state.results_buf) then return end
+  if not _state.results_buf or not vim.api.nvim_buf_is_valid(_state.results_buf) then
+    return
+  end
   local lines = {}
   if #_state.entries == 0 then
     lines = { "  (no matches)" }
@@ -129,7 +139,9 @@ local function render_results()
 end
 
 local function get_query()
-  if not _state.prompt_buf or not vim.api.nvim_buf_is_valid(_state.prompt_buf) then return "" end
+  if not _state.prompt_buf or not vim.api.nvim_buf_is_valid(_state.prompt_buf) then
+    return ""
+  end
   local lines = vim.api.nvim_buf_get_lines(_state.prompt_buf, 0, 1, false)
   return (lines[1] or ""):gsub("^> ", "")
 end
@@ -144,9 +156,13 @@ local function schedule_search(query)
     return
   end
   vim.defer_fn(function()
-    if not _state or _state.closed or token ~= _state.search_token then return end
+    if not _state or _state.closed or token ~= _state.search_token then
+      return
+    end
     api.search_users(query, function(data, err)
-      if not _state or _state.closed or token ~= _state.search_token then return end
+      if not _state or _state.closed or token ~= _state.search_token then
+        return
+      end
       if err then
         vim.notify(err, vim.log.levels.WARN)
         return
@@ -163,13 +179,17 @@ local function on_prompt_changed()
 end
 
 local function move(delta)
-  if #_state.entries == 0 then return end
+  if #_state.entries == 0 then
+    return
+  end
   _state.selected_idx = math.max(1, math.min(#_state.entries, _state.selected_idx + delta))
   render_results()
 end
 
 local function focus_prompt_insert()
-  if not _state or not _state.prompt_win or not vim.api.nvim_win_is_valid(_state.prompt_win) then return end
+  if not _state or not _state.prompt_win or not vim.api.nvim_win_is_valid(_state.prompt_win) then
+    return
+  end
   vim.api.nvim_set_current_win(_state.prompt_win)
   vim.cmd("startinsert!")
   local query = get_query()
@@ -177,9 +197,13 @@ local function focus_prompt_insert()
 end
 
 local function confirm()
-  if not _state then return end
+  if not _state then
+    return
+  end
   local entry = _state.entries[_state.selected_idx]
-  if not entry then return end
+  if not entry then
+    return
+  end
   local key = _state.key
   local on_done = _state.on_done
   local setter = _state.setter or api.set_assignee
@@ -189,7 +213,9 @@ local function confirm()
   setter(key, entry.accountId, function(_, err)
     if err then
       vim.notify(err, vim.log.levels.ERROR)
-      if on_done then pcall(on_done, nil, err) end
+      if on_done then
+        pcall(on_done, nil, err)
+      end
       return
     end
     local label = entry.accountId and entry.displayName or "Unassigned"
@@ -201,9 +227,13 @@ local function confirm()
 end
 
 local function handle_mouse_click()
-  if not _state then return end
+  if not _state then
+    return
+  end
   local pos = vim.fn.getmousepos()
-  if not pos or not pos.winid or pos.winid == 0 then return end
+  if not pos or not pos.winid or pos.winid == 0 then
+    return
+  end
   if pos.winid == _state.prompt_win then
     focus_prompt_insert()
   elseif pos.winid == _state.results_win then
@@ -220,7 +250,9 @@ end
 
 function M.open(key, current_assignee, on_done, opts)
   opts = opts or {}
-  if is_open() then do_close() end
+  if is_open() then
+    do_close()
+  end
   local parent_win = vim.api.nvim_get_current_win()
   _state = fresh_state()
   _state.key = key
@@ -268,8 +300,7 @@ function M.open(key, current_assignee, on_done, opts)
     zindex = 260,
   })
   util.clean_float_window(_state.prompt_win)
-  vim.wo[_state.prompt_win].winhighlight =
-    "FloatBorder:XrayBorder,FloatTitle:XrayTitleFloat,NormalFloat:XrayNormal"
+  vim.wo[_state.prompt_win].winhighlight = "FloatBorder:XrayBorder,FloatTitle:XrayTitleFloat,NormalFloat:XrayNormal"
 
   _state.results_buf = vim.api.nvim_create_buf(false, true)
   vim.bo[_state.results_buf].buftype = "nofile"
@@ -289,14 +320,17 @@ function M.open(key, current_assignee, on_done, opts)
     zindex = 260,
   })
   util.clean_float_window(_state.results_win)
-  vim.wo[_state.results_win].winhighlight =
-    "FloatBorder:XrayBorder,FloatFooter:XrayFooter,NormalFloat:XrayNormal"
+  vim.wo[_state.results_win].winhighlight = "FloatBorder:XrayBorder,FloatFooter:XrayFooter,NormalFloat:XrayNormal"
 
   local p_opts = { buffer = _state.prompt_buf, nowait = true, silent = true }
   local r_opts = { buffer = _state.results_buf, nowait = true, silent = true }
 
-  local down = function() move(1) end
-  local up = function() move(-1) end
+  local down = function()
+    move(1)
+  end
+  local up = function()
+    move(-1)
+  end
 
   vim.keymap.set({ "i", "n" }, "<Esc>", cancel_and_close, p_opts)
   vim.keymap.set("n", "q", cancel_and_close, p_opts)
@@ -306,8 +340,12 @@ function M.open(key, current_assignee, on_done, opts)
   vim.keymap.set({ "i", "n" }, "<C-n>", down, p_opts)
   vim.keymap.set({ "i", "n" }, "<C-p>", up, p_opts)
   vim.keymap.set({ "i", "n" }, "<LeftMouse>", handle_mouse_click, p_opts)
-  vim.keymap.set({ "i", "n" }, "<ScrollWheelDown>", function() move(3) end, p_opts)
-  vim.keymap.set({ "i", "n" }, "<ScrollWheelUp>", function() move(-3) end, p_opts)
+  vim.keymap.set({ "i", "n" }, "<ScrollWheelDown>", function()
+    move(3)
+  end, p_opts)
+  vim.keymap.set({ "i", "n" }, "<ScrollWheelUp>", function()
+    move(-3)
+  end, p_opts)
   vim.keymap.set("n", "j", down, p_opts)
   vim.keymap.set("n", "k", up, p_opts)
   vim.keymap.set("n", "i", focus_prompt_insert, p_opts)
@@ -317,48 +355,70 @@ function M.open(key, current_assignee, on_done, opts)
   vim.keymap.set("n", "q", cancel_and_close, r_opts)
   vim.keymap.set("n", "<CR>", confirm, r_opts)
   vim.keymap.set("n", "<LeftMouse>", handle_mouse_click, r_opts)
-  vim.keymap.set("n", "<ScrollWheelDown>", function() move(3) end, r_opts)
-  vim.keymap.set("n", "<ScrollWheelUp>", function() move(-3) end, r_opts)
+  vim.keymap.set("n", "<ScrollWheelDown>", function()
+    move(3)
+  end, r_opts)
+  vim.keymap.set("n", "<ScrollWheelUp>", function()
+    move(-3)
+  end, r_opts)
   vim.keymap.set("n", "j", down, r_opts)
   vim.keymap.set("n", "k", up, r_opts)
 
-  table.insert(_state.autocmds, vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-    buffer = _state.prompt_buf,
-    callback = function()
-      local line = vim.api.nvim_buf_get_lines(_state.prompt_buf, 0, 1, false)[1] or ""
-      if not line:match("^> ") then
-        vim.api.nvim_buf_set_lines(_state.prompt_buf, 0, 1, false, { "> " .. line })
-        pcall(vim.api.nvim_win_set_cursor, _state.prompt_win, { 1, #line + 2 })
-      end
-      on_prompt_changed()
-    end,
-  }))
-  table.insert(_state.autocmds, vim.api.nvim_create_autocmd("WinClosed", {
-    callback = function(args)
-      if not _state then return end
-      local win = tonumber(args.match)
-      if win == _state.prompt_win or win == _state.results_win then
-        vim.schedule(cancel_and_close)
-      end
-    end,
-  }))
+  table.insert(
+    _state.autocmds,
+    vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+      buffer = _state.prompt_buf,
+      callback = function()
+        local line = vim.api.nvim_buf_get_lines(_state.prompt_buf, 0, 1, false)[1] or ""
+        if not line:match("^> ") then
+          vim.api.nvim_buf_set_lines(_state.prompt_buf, 0, 1, false, { "> " .. line })
+          pcall(vim.api.nvim_win_set_cursor, _state.prompt_win, { 1, #line + 2 })
+        end
+        on_prompt_changed()
+      end,
+    })
+  )
+  table.insert(
+    _state.autocmds,
+    vim.api.nvim_create_autocmd("WinClosed", {
+      callback = function(args)
+        if not _state then
+          return
+        end
+        local win = tonumber(args.match)
+        if win == _state.prompt_win or win == _state.results_win then
+          vim.schedule(cancel_and_close)
+        end
+      end,
+    })
+  )
 
   local on_win_leave = function()
     vim.schedule(function()
-      if not _state or _state.closed then return end
+      if not _state or _state.closed then
+        return
+      end
       local cur = vim.api.nvim_get_current_win()
-      if cur == _state.prompt_win or cur == _state.results_win then return end
+      if cur == _state.prompt_win or cur == _state.results_win then
+        return
+      end
       cancel_and_close(false)
     end)
   end
-  table.insert(_state.autocmds, vim.api.nvim_create_autocmd("WinLeave", {
-    buffer = _state.prompt_buf,
-    callback = on_win_leave,
-  }))
-  table.insert(_state.autocmds, vim.api.nvim_create_autocmd("WinLeave", {
-    buffer = _state.results_buf,
-    callback = on_win_leave,
-  }))
+  table.insert(
+    _state.autocmds,
+    vim.api.nvim_create_autocmd("WinLeave", {
+      buffer = _state.prompt_buf,
+      callback = on_win_leave,
+    })
+  )
+  table.insert(
+    _state.autocmds,
+    vim.api.nvim_create_autocmd("WinLeave", {
+      buffer = _state.results_buf,
+      callback = on_win_leave,
+    })
+  )
 
   build_entries()
   render_results()
@@ -366,8 +426,12 @@ function M.open(key, current_assignee, on_done, opts)
   vim.cmd("startinsert!")
 
   api.get_myself(function(me, err)
-    if not _state or _state.closed then return end
-    if err or not me then return end
+    if not _state or _state.closed then
+      return
+    end
+    if err or not me then
+      return
+    end
     _state.me = me
     _state.pinned = {
       {

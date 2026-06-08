@@ -21,7 +21,9 @@ local function cursor_in_quotes(line, col)
     end
   end
 
-  if not in_quote then return false end
+  if not in_quote then
+    return false
+  end
 
   local end_col
   local i = col + 1
@@ -35,21 +37,22 @@ local function cursor_in_quotes(line, col)
     i = i + 1
   end
 
-  if not end_col then return false end
+  if not end_col then
+    return false
+  end
   return true, quote_char, start_col, end_col
 end
 
 function M.smart_insert(key)
-  if not key or key == "" then return end
+  if not key or key == "" then
+    return
+  end
 
   local buf = vim.api.nvim_get_current_buf()
   if not vim.bo[buf].modifiable or vim.bo[buf].buftype ~= "" then
     vim.fn.setreg("+", key)
     vim.fn.setreg('"', key)
-    vim.notify(
-      "xray: buffer not modifiable — yanked " .. key .. " to clipboard",
-      vim.log.levels.INFO
-    )
+    vim.notify("xray: buffer not modifiable — yanked " .. key .. " to clipboard", vim.log.levels.INFO)
     return
   end
 

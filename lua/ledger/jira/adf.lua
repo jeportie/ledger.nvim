@@ -1,7 +1,9 @@
 local M = {}
 
 local function text_of(node)
-  if type(node) ~= "table" then return "" end
+  if type(node) ~= "table" then
+    return ""
+  end
   local t = node.type
   if t == "text" then
     return node.text or ""
@@ -27,7 +29,9 @@ local function text_of(node)
 end
 
 local function walk(node, lines, depth)
-  if type(node) ~= "table" then return end
+  if type(node) ~= "table" then
+    return
+  end
   depth = depth or 0
   local t = node.type
 
@@ -82,9 +86,13 @@ local function walk(node, lines, depth)
   if t == "blockquote" then
     local before = #lines
     if type(node.content) == "table" then
-      for _, child in ipairs(node.content) do walk(child, lines, depth) end
+      for _, child in ipairs(node.content) do
+        walk(child, lines, depth)
+      end
     end
-    for i = before + 1, #lines do lines[i] = "> " .. lines[i] end
+    for i = before + 1, #lines do
+      lines[i] = "> " .. lines[i]
+    end
     return
   end
 
@@ -113,11 +121,17 @@ local function walk(node, lines, depth)
         table.insert(lines, row_lines[1])
         -- Markdown-style separator after the header row.
         local n_cells = 0
-        for _ in row_lines[1]:gmatch("|[^|]+") do n_cells = n_cells + 1 end
+        for _ in row_lines[1]:gmatch("|[^|]+") do
+          n_cells = n_cells + 1
+        end
         local sep = {}
-        for _ = 1, n_cells do table.insert(sep, "---") end
+        for _ = 1, n_cells do
+          table.insert(sep, "---")
+        end
         table.insert(lines, "| " .. table.concat(sep, " | ") .. " |")
-        for i = 2, #row_lines do table.insert(lines, row_lines[i]) end
+        for i = 2, #row_lines do
+          table.insert(lines, row_lines[i])
+        end
       end
     end
     return
@@ -129,12 +143,16 @@ local function walk(node, lines, depth)
   end
 
   if type(node.content) == "table" then
-    for _, child in ipairs(node.content) do walk(child, lines, depth) end
+    for _, child in ipairs(node.content) do
+      walk(child, lines, depth)
+    end
   end
 end
 
 function M.to_lines(doc, max_lines)
-  if type(doc) ~= "table" or doc.type ~= "doc" then return {} end
+  if type(doc) ~= "table" or doc.type ~= "doc" then
+    return {}
+  end
   local lines = {}
   walk(doc, lines, 0)
   -- Collapse consecutive empty lines
@@ -147,10 +165,14 @@ function M.to_lines(doc, max_lines)
     end
     last_empty = empty
   end
-  while #out > 0 and out[#out] == "" do table.remove(out) end
+  while #out > 0 and out[#out] == "" do
+    table.remove(out)
+  end
   if max_lines and #out > max_lines then
     local trimmed = {}
-    for i = 1, max_lines do trimmed[i] = out[i] end
+    for i = 1, max_lines do
+      trimmed[i] = out[i]
+    end
     table.insert(trimmed, "… (" .. (#out - max_lines) .. " more lines)")
     return trimmed
   end

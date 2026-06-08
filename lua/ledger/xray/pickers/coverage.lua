@@ -14,9 +14,15 @@ local function verdict(counts)
   if counts.desktop == 0 and counts.mobile == 0 and counts.other == 0 then
     return "No references"
   end
-  if counts.desktop > 0 and counts.mobile > 0 then return "Both (desktop + mobile)" end
-  if counts.desktop > 0 then return "Desktop-only" end
-  if counts.mobile > 0 then return "Mobile-only" end
+  if counts.desktop > 0 and counts.mobile > 0 then
+    return "Both (desktop + mobile)"
+  end
+  if counts.desktop > 0 then
+    return "Desktop-only"
+  end
+  if counts.mobile > 0 then
+    return "Mobile-only"
+  end
   return "Other only"
 end
 
@@ -26,16 +32,16 @@ end
 
 local CATEGORY_META = {
   desktop = { label = "Desktop", icon = icons.COVERAGE.desktop },
-  mobile  = { label = "Mobile",  icon = icons.COVERAGE.mobile  },
-  other   = { label = "Other",   icon = icons.COVERAGE.other   },
+  mobile = { label = "Mobile", icon = icons.COVERAGE.mobile },
+  other = { label = "Other", icon = icons.COVERAGE.other },
 }
 
 local function build_lines_and_index(id, root, groups, counts)
   local v = verdict(counts)
   local lines = {
-    icons.LABEL.ticket   .. "  ID:      " .. id,
-    icons.ACTION.jump    .. "  Root:    " .. root,
-    verdict_icon(v)      .. "  Verdict: " .. v,
+    icons.LABEL.ticket .. "  ID:      " .. id,
+    icons.ACTION.jump .. "  Root:    " .. root,
+    verdict_icon(v) .. "  Verdict: " .. v,
     "",
   }
   local index = {}
@@ -63,16 +69,18 @@ local function build_lines_and_index(id, root, groups, counts)
     table.insert(lines, "")
   end
 
-  table.insert(lines, string.format(
-    "%s <CR> jump   <Tab>/<S-Tab> next/prev ref   %s q close",
-    icons.ACTION.jump, icons.ACTION.close
-  ))
+  table.insert(
+    lines,
+    string.format("%s <CR> jump   <Tab>/<S-Tab> next/prev ref   %s q close", icons.ACTION.jump, icons.ACTION.close)
+  )
   return lines, index
 end
 
 local function sorted_index_lines(index)
   local keys = {}
-  for k in pairs(index) do table.insert(keys, k) end
+  for k in pairs(index) do
+    table.insert(keys, k)
+  end
   table.sort(keys)
   return keys
 end
@@ -95,8 +103,14 @@ local function scan(id)
   vim.notify("xray: scanning " .. root .. " for " .. id .. "…", vim.log.levels.INFO)
 
   vim.system({
-    "rg", "--line-number", "--column", "--no-heading", "--color=never",
-    "--fixed-strings", id, root,
+    "rg",
+    "--line-number",
+    "--column",
+    "--no-heading",
+    "--color=never",
+    "--fixed-strings",
+    id,
+    root,
   }, { text = true }, function(obj)
     vim.schedule(function()
       local has_output = obj.stdout and obj.stdout ~= ""
@@ -128,7 +142,9 @@ local function scan(id)
       local buf, win, close = float.open("Coverage: " .. id, lines, {
         on_enter = function(_, lnum)
           local m = index[lnum]
-          if m then jump_to_ref(m) end
+          if m then
+            jump_to_ref(m)
+          end
         end,
       })
 
@@ -142,7 +158,10 @@ local function scan(id)
         local function next_ref()
           local cur = vim.api.nvim_win_get_cursor(win)[1]
           for _, k in ipairs(ref_lines) do
-            if k > cur then jump_to(k); return end
+            if k > cur then
+              jump_to(k)
+              return
+            end
           end
           jump_to(ref_lines[1])
         end
@@ -150,11 +169,15 @@ local function scan(id)
           local cur = vim.api.nvim_win_get_cursor(win)[1]
           local prev
           for _, k in ipairs(ref_lines) do
-            if k < cur then prev = k else break end
+            if k < cur then
+              prev = k
+            else
+              break
+            end
           end
           jump_to(prev or ref_lines[#ref_lines])
         end
-        vim.keymap.set("n", "<Tab>",   next_ref, { buffer = buf, nowait = true, silent = true })
+        vim.keymap.set("n", "<Tab>", next_ref, { buffer = buf, nowait = true, silent = true })
         vim.keymap.set("n", "<S-Tab>", prev_ref, { buffer = buf, nowait = true, silent = true })
         jump_to(ref_lines[1])
       end
@@ -165,9 +188,7 @@ local function scan(id)
 end
 
 local function validate_and_scan(input)
-  local id = util.extract_id(input:upper())
-    or (input:upper():match("^%d+$") and "B2CQA-" .. input)
-    or input:upper()
+  local id = util.extract_id(input:upper()) or (input:upper():match("^%d+$") and "B2CQA-" .. input) or input:upper()
   if not id:match("^B2CQA%-%d+$") then
     vim.notify("xray: expected B2CQA-<number>, got " .. input, vim.log.levels.ERROR)
     return
@@ -180,12 +201,21 @@ local function load_id_cache()
   if _id_cache.ids and _id_cache.root == root then
     return _id_cache.ids
   end
-  if vim.fn.executable("rg") ~= 1 then return {} end
+  if vim.fn.executable("rg") ~= 1 then
+    return {}
+  end
 
-  local obj = vim.system({
-    "rg", "--only-matching", "--no-filename", "--no-line-number", "--color=never",
-    "B2CQA-[0-9]+", root,
-  }, { text = true }):wait()
+  local obj = vim
+    .system({
+      "rg",
+      "--only-matching",
+      "--no-filename",
+      "--no-line-number",
+      "--color=never",
+      "B2CQA-[0-9]+",
+      root,
+    }, { text = true })
+    :wait()
 
   local seen = {}
   local ids = {}
@@ -209,10 +239,14 @@ end
 _G.XrayCoverageComplete = function(arg_lead, _, _)
   local ids = load_id_cache()
   local lead = arg_lead:upper()
-  if lead == "" then return ids end
+  if lead == "" then
+    return ids
+  end
   local matches = {}
   for _, id in ipairs(ids) do
-    if id:sub(1, #lead) == lead then table.insert(matches, id) end
+    if id:sub(1, #lead) == lead then
+      table.insert(matches, id)
+    end
   end
   return matches
 end
@@ -224,7 +258,9 @@ function M.run()
     return
   end
 
-  vim.schedule(function() load_id_cache() end)
+  vim.schedule(function()
+    load_id_cache()
+  end)
 
   local ok, input = pcall(vim.fn.input, {
     prompt = "Xray coverage — ticket ID: ",
@@ -232,8 +268,12 @@ function M.run()
     completion = "customlist,v:lua.XrayCoverageComplete",
     cancelreturn = "",
   })
-  if not ok or not input or input == "" then return end
-  if input == "B2CQA-" then return end
+  if not ok or not input or input == "" then
+    return
+  end
+  if input == "B2CQA-" then
+    return
+  end
   validate_and_scan(input)
 end
 

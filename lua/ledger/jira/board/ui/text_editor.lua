@@ -27,20 +27,25 @@ function M.open(opts)
   for line in (initial .. "\n"):gmatch("([^\n]*)\n") do
     table.insert(lines, line)
   end
-  if #lines == 0 then lines = { "" } end
+  if #lines == 0 then
+    lines = { "" }
+  end
   api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 
   local win = api.nvim_open_win(buf, true, {
-    relative = "editor", row = row, col = col,
-    width = w, height = h,
-    style = "minimal", border = "rounded",
+    relative = "editor",
+    row = row,
+    col = col,
+    width = w,
+    height = h,
+    style = "minimal",
+    border = "rounded",
     zindex = 240,
     title = " " .. title .. " — <C-s> save, <Esc> cancel ",
     title_pos = "left",
   })
   jutil.clean_float_window(win)
-  vim.wo[win].winhighlight =
-    "NormalFloat:JiraBoardNormal,FloatBorder:JiraBoardBorder,FloatTitle:JiraBoardTitle"
+  vim.wo[win].winhighlight = "NormalFloat:JiraBoardNormal,FloatBorder:JiraBoardBorder,FloatTitle:JiraBoardTitle"
   vim.wo[win].wrap = true
   vim.wo[win].linebreak = true
 
@@ -48,26 +53,40 @@ function M.open(opts)
   hl.define(ns)
   api.nvim_win_set_hl_ns(win, ns)
   api.nvim_set_hl(ns, "FloatBorder", { link = "JiraBoardBorder" })
-  api.nvim_set_hl(ns, "Normal",      { link = "JiraBoardNormal" })
+  api.nvim_set_hl(ns, "Normal", { link = "JiraBoardNormal" })
 
   vim.cmd("stopinsert")
 
   local closed = false
   local function close(save)
-    if closed then return end
+    if closed then
+      return
+    end
     closed = true
     local text = table.concat(api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
-    if api.nvim_win_is_valid(win) then pcall(api.nvim_win_close, win, true) end
-    if api.nvim_buf_is_valid(buf) then pcall(api.nvim_buf_delete, buf, { force = true }) end
-    if save and on_save then pcall(on_save, text) end
+    if api.nvim_win_is_valid(win) then
+      pcall(api.nvim_win_close, win, true)
+    end
+    if api.nvim_buf_is_valid(buf) then
+      pcall(api.nvim_buf_delete, buf, { force = true })
+    end
+    if save and on_save then
+      pcall(on_save, text)
+    end
   end
 
   local function map(mode, lhs, fn)
     vim.keymap.set(mode, lhs, fn, { buffer = buf, nowait = true, silent = true })
   end
-  map({ "n", "i" }, "<C-s>", function() close(true) end)
-  map({ "n", "i" }, "<Esc>", function() close(false) end)
-  map("n", "q",              function() close(false) end)
+  map({ "n", "i" }, "<C-s>", function()
+    close(true)
+  end)
+  map({ "n", "i" }, "<Esc>", function()
+    close(false)
+  end)
+  map("n", "q", function()
+    close(false)
+  end)
 end
 
 return M

@@ -30,14 +30,20 @@ function M.close()
   clear_origin_autocmd()
   for _ = #stack, 1, -1 do
     local frame = table.remove(stack)
-    if frame and frame.close then pcall(frame.close) end
+    if frame and frame.close then
+      pcall(frame.close)
+    end
   end
 end
 
 local function pop_one()
-  if #stack == 0 then return end
+  if #stack == 0 then
+    return
+  end
   local frame = table.remove(stack)
-  if frame and frame.close then pcall(frame.close) end
+  if frame and frame.close then
+    pcall(frame.close)
+  end
   if #stack == 0 then
     clear_origin_autocmd()
     return
@@ -50,7 +56,9 @@ end
 
 local function find_frame(key)
   for i, f in ipairs(stack) do
-    if f.key == key then return i end
+    if f.key == key then
+      return i
+    end
   end
   return nil
 end
@@ -59,7 +67,9 @@ local function collapse_to(idx)
   clear_origin_autocmd()
   for _ = #stack, idx + 1, -1 do
     local frame = table.remove(stack)
-    if frame and frame.close then pcall(frame.close) end
+    if frame and frame.close then
+      pcall(frame.close)
+    end
   end
   local t = stack[idx]
   if t and t.win and vim.api.nvim_win_is_valid(t.win) then
@@ -74,8 +84,12 @@ local function open_peek(key, issue, origin_buf, opts)
 
   local function refresh()
     cache.fetch(key, function(fresh, ferr)
-      if ferr or not fresh then return end
-      if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+      if ferr or not fresh then
+        return
+      end
+      if not buf or not vim.api.nvim_buf_is_valid(buf) then
+        return
+      end
       float.update(buf, format.ticket_lines(fresh))
     end)
   end
@@ -135,7 +149,9 @@ end
 
 function M.trigger(key, opts)
   key = key or util.cword_id()
-  if not key then return false end
+  if not key then
+    return false
+  end
   opts = opts or {}
 
   local idx = find_frame(key)
@@ -156,7 +172,9 @@ function M.trigger(key, opts)
 end
 
 function M.hover_or_lsp()
-  if M.trigger() then return end
+  if M.trigger() then
+    return
+  end
   pcall(vim.lsp.buf.hover)
 end
 

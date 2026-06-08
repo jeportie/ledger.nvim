@@ -5,40 +5,51 @@ local volt = require("volt")
 local hl = require("ledger.jira.board.ui.hl")
 local jutil = require("ledger.jira.util")
 
-local function dw(s) return vim.fn.strdisplaywidth(s or "") end
+local function dw(s)
+  return vim.fn.strdisplaywidth(s or "")
+end
 
 local KEYS = {
-  { "Navigation", {
-    { "h  /  <S-Tab>",  "previous column" },
-    { "l  /  <Tab>",    "next column" },
-    { "j  /  k",        "next / previous card" },
-    { "<LeftMouse>",    "select card" },
-  } },
-  { "Actions", {
-    { "<CR>",           "preview ticket" },
-    { "p",              "preview ticket" },
-    { "b",              "open ticket in browser" },
-    { "<2-LeftMouse>",  "preview ticket" },
-    { "y",              "yank ticket key" },
-    { "t",              "transition status" },
-    { "m",              "assign to me" },
-    { "a",              "assign to someone…" },
-    { "u",              "unassign" },
-    { "<RightMouse>",   "context menu" },
-  } },
-  { "View", {
-    { "A",              "toggle assignee filter (me ↔ all)" },
-    { "B",              "toggle Backlog column" },
-    { "z",              "collapse / expand epic at cursor" },
-    { "Z",              "collapse all epics" },
-    { "<S-Z>",          "expand all epics" },
-    { "f",              "filter picker" },
-    { "R",              "refresh board" },
-    { "<C-l>",          "redraw" },
-  } },
+  {
+    "Navigation",
+    {
+      { "h  /  <S-Tab>", "previous column" },
+      { "l  /  <Tab>", "next column" },
+      { "j  /  k", "next / previous card" },
+      { "<LeftMouse>", "select card" },
+    },
+  },
+  {
+    "Actions",
+    {
+      { "<CR>", "preview ticket" },
+      { "p", "preview ticket" },
+      { "b", "open ticket in browser" },
+      { "<2-LeftMouse>", "preview ticket" },
+      { "y", "yank ticket key" },
+      { "t", "transition status" },
+      { "m", "assign to me" },
+      { "a", "assign to someone…" },
+      { "u", "unassign" },
+      { "<RightMouse>", "context menu" },
+    },
+  },
+  {
+    "View",
+    {
+      { "A", "toggle assignee filter (me ↔ all)" },
+      { "B", "toggle Backlog column" },
+      { "z", "collapse / expand epic at cursor" },
+      { "Z", "collapse all epics" },
+      { "<S-Z>", "expand all epics" },
+      { "f", "filter picker" },
+      { "R", "refresh board" },
+      { "<C-l>", "redraw" },
+    },
+  },
   { "Window", {
-    { "?",              "this help" },
-    { "q / <Esc>",      "close" },
+    { "?", "this help" },
+    { "q / <Esc>", "close" },
   } },
 }
 
@@ -58,7 +69,9 @@ end
 local function build_lines(inner_w)
   local lines = {}
 
-  local function row_raw(segs) table.insert(lines, segs) end
+  local function row_raw(segs)
+    table.insert(lines, segs)
+  end
 
   -- Title line (centered)
   local title = "Jira Board — Keymaps"
@@ -88,7 +101,9 @@ local function build_lines(inner_w)
       local desc = entry[2]
       local chip = " " .. keystr .. " "
       local mid = inner_w - 4 - dw(chip) - dw(desc)
-      if mid < 1 then mid = 1 end
+      if mid < 1 then
+        mid = 1
+      end
       row_raw({
         { "  ", "JiraBoardNormal" },
         { chip, "JiraBoardKeyChip" },
@@ -105,7 +120,8 @@ end
 
 function M.toggle()
   if _state.win and api.nvim_win_is_valid(_state.win) then
-    close(); return
+    close()
+    return
   end
 
   local inner_w = 52
@@ -121,9 +137,13 @@ function M.toggle()
 
   local buf = api.nvim_create_buf(false, true)
   local win = api.nvim_open_win(buf, true, {
-    relative = "editor", row = row, col = col,
-    width = w, height = h,
-    style = "minimal", border = "single",
+    relative = "editor",
+    row = row,
+    col = col,
+    width = w,
+    height = h,
+    style = "minimal",
+    border = "single",
     zindex = 150,
   })
   jutil.clean_float_window(win)
@@ -134,23 +154,36 @@ function M.toggle()
   hl.define(ns)
   api.nvim_win_set_hl_ns(win, ns)
   api.nvim_set_hl(ns, "FloatBorder", { link = "JiraBoardBorder" })
-  api.nvim_set_hl(ns, "Normal",      { link = "JiraBoardNormal" })
+  api.nvim_set_hl(ns, "Normal", { link = "JiraBoardNormal" })
 
   _state.buf = buf
   _state.win = win
   _state.ns = ns
 
   local layout = {
-    { name = "body", lines = function() return lines end },
+    {
+      name = "body",
+      lines = function()
+        return lines
+      end,
+    },
   }
   volt.gen_data({ { buf = buf, xpad = 0, layout = layout, ns = ns } })
   volt.set_empty_lines(buf, inner_h, w)
-  volt.run(buf, { h = inner_h, w = w, custom_empty_lines = function()
-    volt.set_empty_lines(buf, inner_h, w)
-  end })
+  volt.run(buf, {
+    h = inner_h,
+    w = w,
+    custom_empty_lines = function()
+      volt.set_empty_lines(buf, inner_h, w)
+    end,
+  })
 
-  local function map(lhs) vim.keymap.set("n", lhs, close, { buffer = buf, nowait = true, silent = true }) end
-  map("q"); map("<Esc>"); map("?")
+  local function map(lhs)
+    vim.keymap.set("n", lhs, close, { buffer = buf, nowait = true, silent = true })
+  end
+  map("q")
+  map("<Esc>")
+  map("?")
 
   local function noop(lhs)
     vim.keymap.set("n", lhs, function() end, { buffer = buf, nowait = true, silent = true })

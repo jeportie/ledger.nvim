@@ -6,9 +6,15 @@ local api = require("ledger.jira.api")
 function M.find_boards(opts, callback)
   opts = opts or {}
   local query = { maxResults = 50 }
-  if opts.name then query.name = opts.name end
-  if opts.project then query.projectKeyOrId = opts.project end
-  if opts.type then query.type = opts.type end
+  if opts.name then
+    query.name = opts.name
+  end
+  if opts.project then
+    query.projectKeyOrId = opts.project
+  end
+  if opts.type then
+    query.type = opts.type
+  end
   api.request({ path = "/rest/agile/1.0/board", query = query }, callback)
 end
 
@@ -26,8 +32,12 @@ function M.get_board_issues(board_id, opts, callback)
     maxResults = opts.max_results or 100,
     fields = opts.fields or "summary,status,priority,assignee,labels,issuetype",
   }
-  if opts.jql then query.jql = opts.jql end
-  if opts.start_at then query.startAt = opts.start_at end
+  if opts.jql then
+    query.jql = opts.jql
+  end
+  if opts.start_at then
+    query.startAt = opts.start_at
+  end
   api.request({
     path = "/rest/agile/1.0/board/" .. tostring(board_id) .. "/issue",
     query = query,
@@ -49,10 +59,15 @@ function M.get_all_board_issues(board_id, opts, on_done)
       jql = opts.jql,
       fields = opts.fields,
     }, function(data, err)
-      if err then on_done(nil, err); return end
+      if err then
+        on_done(nil, err)
+        return
+      end
       pages_loaded = pages_loaded + 1
       local issues = (data and data.issues) or {}
-      for _, i in ipairs(issues) do table.insert(acc, i) end
+      for _, i in ipairs(issues) do
+        table.insert(acc, i)
+      end
       local total = (data and data.total) or 0
       local fetched = (start_at or 0) + #issues
       if fetched < total and #issues > 0 and pages_loaded < page_cap then
@@ -74,14 +89,20 @@ end
 -- else first fuzzy match, else nil)
 function M.find_board_by_name(name, project, callback)
   M.find_boards({ name = name, project = project }, function(data, err)
-    if err then callback(nil, err); return end
+    if err then
+      callback(nil, err)
+      return
+    end
     local values = (data and data.values) or {}
     if #values == 0 then
       callback(nil, "jira: no board matching '" .. name .. "'")
       return
     end
     for _, b in ipairs(values) do
-      if b.name == name then callback(b, nil); return end
+      if b.name == name then
+        callback(b, nil)
+        return
+      end
     end
     callback(values[1], nil)
   end)

@@ -5,14 +5,16 @@ local multi = require("ledger.jira.pickers.multi_select")
 
 local CATEGORIES = {
   { key = "assignees", label = "  Assignees" },
-  { key = "epics",     label = "  Epics" },
-  { key = "types",     label = "  Types" },
-  { key = "labels",    label = "  Labels" },
+  { key = "epics", label = "  Epics" },
+  { key = "types", label = "  Types" },
+  { key = "labels", label = "  Labels" },
 }
 
 local function rerender_board()
   local ok, win = pcall(require, "jira-board.ui.window")
-  if ok and win.is_open() then win.rerender() end
+  if ok and win.is_open() then
+    win.rerender()
+  end
 end
 
 -- Open the multi-select picker for one category.
@@ -32,7 +34,9 @@ function M.open_category(cat)
     label_to_id[opt.label] = opt.id
     id_to_label[opt.id] = opt.label
     table.insert(label_list, opt.label)
-    if current_set[opt.id] then table.insert(current_labels, opt.label) end
+    if current_set[opt.id] then
+      table.insert(current_labels, opt.label)
+    end
   end
 
   multi.open({
@@ -40,11 +44,15 @@ function M.open_category(cat)
     options = label_list,
     current = current_labels,
     on_done = function(selected, _)
-      if selected == nil then return end -- cancelled
+      if selected == nil then
+        return
+      end -- cancelled
       local new_set = {}
       for _, lbl in ipairs(selected) do
         local id = label_to_id[lbl]
-        if id then new_set[id] = lbl end
+        if id then
+          new_set[id] = lbl
+        end
       end
       store.set_filter_category(cat, new_set)
       rerender_board()
@@ -65,12 +73,16 @@ function M.open()
   for _, cat in ipairs(CATEGORIES) do
     local set = store.state.filters[cat.key] or {}
     local n = 0
-    for _ in pairs(set) do n = n + 1 end
+    for _ in pairs(set) do
+      n = n + 1
+    end
     local suffix = n > 0 and ("(" .. n .. ")") or ""
     table.insert(items, {
       name = cat.label,
       rtxt = suffix,
-      cmd = function() M.open_category(cat.key) end,
+      cmd = function()
+        M.open_category(cat.key)
+      end,
     })
   end
   table.insert(items, { name = "separator" })

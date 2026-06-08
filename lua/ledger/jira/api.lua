@@ -23,16 +23,22 @@ local function headers(creds)
 end
 
 local function parse_json(body)
-  if not body or body == "" then return nil end
+  if not body or body == "" then
+    return nil
+  end
   local ok, decoded = pcall(vim.json.decode, body)
-  if not ok then return nil end
+  if not ok then
+    return nil
+  end
   return decoded
 end
 
 function M.request(opts, callback)
   local creds, err = config.credentials()
   if not creds then
-    vim.schedule(function() callback(nil, err) end)
+    vim.schedule(function()
+      callback(nil, err)
+    end)
     return
   end
 
@@ -97,8 +103,12 @@ function M.search_issues(jql, callback, opts)
     fields = opts.fields or table.concat({ "summary", "status", "issuetype" }, ","),
     maxResults = opts.max_results or 100,
   }
-  if opts.expand then query.expand = opts.expand end
-  if opts.next_page_token then query.nextPageToken = opts.next_page_token end
+  if opts.expand then
+    query.expand = opts.expand
+  end
+  if opts.next_page_token then
+    query.nextPageToken = opts.next_page_token
+  end
   M.request({ path = "/rest/api/3/search/jql", query = query }, callback)
 end
 
@@ -112,7 +122,10 @@ function M.search_all(jql, opts, on_page, on_done)
 
   local function fetch(token)
     M.search_issues(jql, function(data, err)
-      if err then on_done(err); return end
+      if err then
+        on_done(err)
+        return
+      end
       pages_loaded = pages_loaded + 1
       local issues = (data and data.issues) or {}
       local is_last = data and data.isLast

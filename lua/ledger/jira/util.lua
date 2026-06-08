@@ -37,7 +37,9 @@ function M.screen_cursor_anchor(outer_w, outer_h)
 end
 
 function M.clean_float_window(win)
-  if not win or not vim.api.nvim_win_is_valid(win) then return end
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
   vim.wo[win].signcolumn = "no"
   vim.wo[win].foldcolumn = "0"
   vim.wo[win].number = false
@@ -52,33 +54,67 @@ function M.clean_float_window(win)
   vim.wo[win].winbar = ""
   vim.wo[win].scrolloff = 0
   vim.wo[win].sidescrolloff = 0
-  pcall(function() vim.wo[win].scrollbind = false end)
-  pcall(function() vim.wo[win].cursorbind = false end)
-  pcall(function() vim.wo[win].showbreak = "" end)
-  pcall(function() vim.wo[win].breakindent = false end)
-  pcall(function() vim.wo[win].smoothscroll = false end)
-  pcall(function() vim.wo[win].linebreak = false end)
-  pcall(function() vim.wo[win].virtualedit = "" end)
+  pcall(function()
+    vim.wo[win].scrollbind = false
+  end)
+  pcall(function()
+    vim.wo[win].cursorbind = false
+  end)
+  pcall(function()
+    vim.wo[win].showbreak = ""
+  end)
+  pcall(function()
+    vim.wo[win].breakindent = false
+  end)
+  pcall(function()
+    vim.wo[win].smoothscroll = false
+  end)
+  pcall(function()
+    vim.wo[win].linebreak = false
+  end)
+  pcall(function()
+    vim.wo[win].virtualedit = ""
+  end)
   pcall(vim.api.nvim_win_call, win, function()
     pcall(vim.fn.winrestview, { leftcol = 0 })
   end)
 end
 
 function M.disable_completion(buf)
-  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
-  pcall(function() vim.bo[buf].complete = "" end)
-  pcall(function() vim.bo[buf].omnifunc = "" end)
-  pcall(function() vim.b[buf].completion = false end)
-  pcall(function() vim.b[buf].cmp_enabled = false end)
-  pcall(function() vim.b[buf].blink_cmp_enabled = false end)
-  pcall(function() vim.b[buf].copilot_enabled = false end)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  pcall(function()
+    vim.bo[buf].complete = ""
+  end)
+  pcall(function()
+    vim.bo[buf].omnifunc = ""
+  end)
+  pcall(function()
+    vim.b[buf].completion = false
+  end)
+  pcall(function()
+    vim.b[buf].cmp_enabled = false
+  end)
+  pcall(function()
+    vim.b[buf].blink_cmp_enabled = false
+  end)
+  pcall(function()
+    vim.b[buf].copilot_enabled = false
+  end)
   -- Smooth-scroll plugins (snacks.scroll, neoscroll, etc.) animate the viewport
   -- by rendering the buffer at both old and new positions during the animation.
   -- That animation leaks into adjacent floats and persists across window
   -- lifecycle — opt out at the buffer level.
-  pcall(function() vim.b[buf].snacks_scroll = false end)
-  pcall(function() vim.b[buf].miniindentscope_disable = true end)
-  pcall(function() vim.b[buf].ibl_disabled = true end)
+  pcall(function()
+    vim.b[buf].snacks_scroll = false
+  end)
+  pcall(function()
+    vim.b[buf].miniindentscope_disable = true
+  end)
+  pcall(function()
+    vim.b[buf].ibl_disabled = true
+  end)
 end
 
 return M

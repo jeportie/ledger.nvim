@@ -12,40 +12,40 @@ local PLATFORM_SHORT = {
 }
 
 local STATUS_GROUP = {
-  ["Done"]                = "XrayStatusOk",
-  ["Closed"]              = "XrayStatusOk",
-  ["Automated"]           = "XrayStatusOk",
+  ["Done"] = "XrayStatusOk",
+  ["Closed"] = "XrayStatusOk",
+  ["Automated"] = "XrayStatusOk",
   ["Automation Required"] = "XrayStatusWarn",
-  ["In Progress"]         = "XrayStatusWarn",
-  ["Manual Test"]         = "XrayStatusInfo",
-  ["To Do"]               = "XrayStatusInfo",
-  ["Open"]                = "XrayStatusInfo",
-  ["Ready"]               = "XrayStatusInfo",
-  ["Blocked"]             = "XrayStatusError",
-  ["Reviewing"]           = "XrayStatusWarn",
+  ["In Progress"] = "XrayStatusWarn",
+  ["Manual Test"] = "XrayStatusInfo",
+  ["To Do"] = "XrayStatusInfo",
+  ["Open"] = "XrayStatusInfo",
+  ["Ready"] = "XrayStatusInfo",
+  ["Blocked"] = "XrayStatusError",
+  ["Reviewing"] = "XrayStatusWarn",
 }
 
 local PRIORITY_GROUP = {
   Highest = "XrayPriorityHigh",
-  High    = "XrayPriorityHigh",
-  Medium  = "XrayPriorityMedium",
-  Low     = "XrayPriorityLow",
-  Lowest  = "XrayPriorityLow",
+  High = "XrayPriorityHigh",
+  Medium = "XrayPriorityMedium",
+  Low = "XrayPriorityLow",
+  Lowest = "XrayPriorityLow",
 }
 
 local YESNO_GROUP = {
   Yes = "XrayStatusWarn",
-  No  = "XrayStatusOk",
+  No = "XrayStatusOk",
 }
 
 local SEVERITY_GROUP = {
   Critical = "XrayStatusError",
-  High     = "XrayStatusError",
-  Major    = "XrayStatusError",
-  Medium   = "XrayStatusWarn",
-  Low      = "XrayStatusInfo",
-  Minor    = "XrayStatusInfo",
-  Trivial  = "XrayStatusMuted",
+  High = "XrayStatusError",
+  Major = "XrayStatusError",
+  Medium = "XrayStatusWarn",
+  Low = "XrayStatusInfo",
+  Minor = "XrayStatusInfo",
+  Trivial = "XrayStatusMuted",
 }
 
 local function status_group(name)
@@ -61,18 +61,34 @@ local function severity_group(name)
 end
 
 local function option_value(v)
-  if v == nil or v == vim.NIL then return nil end
-  if type(v) == "string" then return v ~= "" and v or nil end
-  if type(v) == "number" then return tostring(v) end
-  if type(v) ~= "table" then return nil end
-  if vim.tbl_isempty(v) then return nil end
-  if v.value then return v.value end
-  if v.name then return v.name end
+  if v == nil or v == vim.NIL then
+    return nil
+  end
+  if type(v) == "string" then
+    return v ~= "" and v or nil
+  end
+  if type(v) == "number" then
+    return tostring(v)
+  end
+  if type(v) ~= "table" then
+    return nil
+  end
+  if vim.tbl_isempty(v) then
+    return nil
+  end
+  if v.value then
+    return v.value
+  end
+  if v.name then
+    return v.name
+  end
   return nil
 end
 
 local function options_list(v)
-  if type(v) ~= "table" or vim.tbl_isempty(v) then return {} end
+  if type(v) ~= "table" or vim.tbl_isempty(v) then
+    return {}
+  end
   local names = {}
   for _, opt in ipairs(v) do
     local name = (type(opt) == "table" and (opt.value or opt.name)) or tostring(opt)
@@ -82,46 +98,74 @@ local function options_list(v)
 end
 
 local function field_id_by_name(names_map, target)
-  if type(names_map) ~= "table" then return nil end
+  if type(names_map) ~= "table" then
+    return nil
+  end
   for id, label in pairs(names_map) do
-    if label == target then return id end
+    if label == target then
+      return id
+    end
   end
   return nil
 end
 
 local function field_by_name(issue, target)
   local id = field_id_by_name(issue.names, target)
-  if not id then return nil end
+  if not id then
+    return nil
+  end
   return (issue.fields or {})[id]
 end
 
 local function parse_iso(iso)
-  if type(iso) ~= "string" then return nil end
+  if type(iso) ~= "string" then
+    return nil
+  end
   local y, mo, d, h, mi, s = iso:match("^(%d%d%d%d)-(%d%d)-(%d%d)T(%d%d):(%d%d):(%d%d)")
-  if not y then return nil end
+  if not y then
+    return nil
+  end
   return os.time({
-    year = tonumber(y), month = tonumber(mo), day = tonumber(d),
-    hour = tonumber(h), min = tonumber(mi), sec = tonumber(s),
+    year = tonumber(y),
+    month = tonumber(mo),
+    day = tonumber(d),
+    hour = tonumber(h),
+    min = tonumber(mi),
+    sec = tonumber(s),
   })
 end
 
 local function time_ago(iso)
   local t = parse_iso(iso)
-  if not t then return nil end
+  if not t then
+    return nil
+  end
   local now = os.time()
   local diff = now - t
-  if diff < 60 then return "just now" end
-  if diff < 3600 then return math.floor(diff / 60) .. "m ago" end
-  if diff < 86400 then return math.floor(diff / 3600) .. "h ago" end
-  if diff < 86400 * 30 then return math.floor(diff / 86400) .. "d ago" end
-  if diff < 86400 * 365 then return math.floor(diff / (86400 * 30)) .. "mo ago" end
+  if diff < 60 then
+    return "just now"
+  end
+  if diff < 3600 then
+    return math.floor(diff / 60) .. "m ago"
+  end
+  if diff < 86400 then
+    return math.floor(diff / 3600) .. "h ago"
+  end
+  if diff < 86400 * 30 then
+    return math.floor(diff / 86400) .. "d ago"
+  end
+  if diff < 86400 * 365 then
+    return math.floor(diff / (86400 * 30)) .. "mo ago"
+  end
   return math.floor(diff / (86400 * 365)) .. "y ago"
 end
 
 local function pad_display(s, w)
   s = s or ""
   local len = vim.fn.strdisplaywidth(s)
-  if len >= w then return s, 0 end
+  if len >= w then
+    return s, 0
+  end
   return s .. string.rep(" ", w - len), w - len
 end
 
@@ -155,7 +199,10 @@ function M.ticket_lines(issue)
   local hl = {}
   local regions = {}
 
-  local function push(text) table.insert(lines, text); return #lines - 1 end
+  local function push(text)
+    table.insert(lines, text)
+    return #lines - 1
+  end
   local function mark(lineno, col_start, col_end, group)
     table.insert(hl, { line = lineno, col_start = col_start, col_end = col_end, hl_group = group })
   end
@@ -201,7 +248,9 @@ function M.ticket_lines(issue)
     local chips_str = ""
     local ranges = {}
     for i, item in ipairs(items) do
-      if i > 1 then chips_str = chips_str .. "  " end
+      if i > 1 then
+        chips_str = chips_str .. "  "
+      end
       local start = #prefix + #chips_str
       chips_str = chips_str .. item
       table.insert(ranges, { col_start = start, col_end = start + #item, hl_group = group or "XrayChip" })
@@ -275,9 +324,7 @@ function M.ticket_lines(issue)
 
   local priority_name = (type(f.priority) == "table" and f.priority.name) or "—"
   local priority_icon = priority_name ~= "—" and icons.priority(priority_name) or ""
-  local priority_display = priority_icon ~= ""
-    and (priority_icon .. " " .. priority_name)
-    or priority_name
+  local priority_display = priority_icon ~= "" and (priority_icon .. " " .. priority_name) or priority_name
   row(icons.LABEL.priority, "Priority", priority_display, priority_group(priority_name))
 
   local team = option_value(f.customfield_10971) or "—"
@@ -287,7 +334,9 @@ function M.ticket_lines(issue)
   local components = {}
   if type(f.components) == "table" then
     for _, c in ipairs(f.components) do
-      if type(c) == "table" and c.name then table.insert(components, c.name) end
+      if type(c) == "table" and c.name then
+        table.insert(components, c.name)
+      end
     end
   end
   chips_row(icons.LABEL.platforms, "Components", components, "XrayChip", "—")
@@ -296,7 +345,9 @@ function M.ticket_lines(issue)
   local fix_versions = {}
   if type(f.fixVersions) == "table" then
     for _, v in ipairs(f.fixVersions) do
-      if type(v) == "table" and v.name then table.insert(fix_versions, v.name) end
+      if type(v) == "table" and v.name then
+        table.insert(fix_versions, v.name)
+      end
     end
   end
   chips_row(icons.LABEL.updated, "Fix versions", fix_versions, "XrayChip", "None")
@@ -305,7 +356,9 @@ function M.ticket_lines(issue)
   local labels_list = {}
   if type(f.labels) == "table" then
     for _, l in ipairs(f.labels) do
-      if type(l) == "string" and l ~= "" then table.insert(labels_list, l) end
+      if type(l) == "string" and l ~= "" then
+        table.insert(labels_list, l)
+      end
     end
   end
   chips_row(icons.LABEL.labels, "Labels", labels_list, "XrayChip", "—")
@@ -358,7 +411,9 @@ function M.ticket_lines(issue)
         local short = PLATFORM_SHORT[name] or name
         local icon = icons.platform(name)
         local chip = icon .. " " .. short
-        if i > 1 then chips_str = chips_str .. "   " end
+        if i > 1 then
+          chips_str = chips_str .. "   "
+        end
         local start = #prefix + #chips_str
         chips_str = chips_str .. chip
         table.insert(chip_ranges, { col_start = start, col_end = start + #chip, hl_group = "XrayPlatform" })
@@ -394,7 +449,9 @@ function M.ticket_lines(issue)
         local short = PLATFORM_SHORT[name] or name
         local icon = icons.platform(name)
         local chip = icon .. " " .. short
-        if i > 1 then chips_str = chips_str .. "   " end
+        if i > 1 then
+          chips_str = chips_str .. "   "
+        end
         local start = #prefix + #chips_str
         chips_str = chips_str .. chip
         table.insert(chip_ranges, { col_start = start, col_end = start + #chip, hl_group = "XrayStatusOk" })
@@ -421,8 +478,13 @@ function M.ticket_lines(issue)
     local label_part = icons.LABEL.assignee .. "  Assignee"
     local padded = pad_display(label_part, LABEL_W)
     local vstart = #padded + #LABEL_GAP
-    region("assignee", assignee_lnum, vstart, vstart + #assignee_name,
-      { displayName = assignee_name, accountId = assignee_account })
+    region(
+      "assignee",
+      assignee_lnum,
+      vstart,
+      vstart + #assignee_name,
+      { displayName = assignee_name, accountId = assignee_account }
+    )
   end
 
   local reporter_name = (type(f.reporter) == "table" and f.reporter.displayName) or nil
@@ -443,8 +505,7 @@ function M.ticket_lines(issue)
       local sf = st.fields or {}
       local st_status = (type(sf.status) == "table" and sf.status.name) or "?"
       local st_summary = sf.summary or ""
-      local st_line = string.format("  %s %-12s  %s",
-        icons.status(st_status), st.key or "?", st_summary)
+      local st_line = string.format("  %s %-12s  %s", icons.status(st_status), st.key or "?", st_summary)
       if vim.fn.strdisplaywidth(st_line) > MAX_WIDTH then
         st_line = st_line:sub(1, MAX_WIDTH - 1) .. "…"
       end
@@ -466,16 +527,17 @@ function M.ticket_lines(issue)
       local ltype = (link.type or {})
       local target, relation
       if outward then
-        target = outward; relation = ltype.outward or "relates to"
+        target = outward
+        relation = ltype.outward or "relates to"
       elseif inward then
-        target = inward; relation = ltype.inward or "relates to"
+        target = inward
+        relation = ltype.inward or "relates to"
       end
       if target then
         local tf = target.fields or {}
         local t_status = (type(tf.status) == "table" and tf.status.name) or "?"
         local t_summary = tf.summary or ""
-        local line = string.format("  %s %s: %-12s  %s",
-          icons.status(t_status), relation, target.key or "?", t_summary)
+        local line = string.format("  %s %s: %-12s  %s", icons.status(t_status), relation, target.key or "?", t_summary)
         if vim.fn.strdisplaywidth(line) > MAX_WIDTH then
           line = line:sub(1, MAX_WIDTH - 1) .. "…"
         end
@@ -490,8 +552,8 @@ function M.ticket_lines(issue)
 
   -- Comments
   local comments_container = type(f.comment) == "table" and f.comment or nil
-  local comments = (comments_container and type(comments_container.comments) == "table")
-    and comments_container.comments or {}
+  local comments = (comments_container and type(comments_container.comments) == "table") and comments_container.comments
+    or {}
   push("")
   section_header("Comments (" .. #comments .. ")")
   for _, c in ipairs(comments) do
@@ -544,8 +606,7 @@ function M.search_entry(issue)
     key = issue.key,
     status = status,
     summary = summary,
-    display = string.format("%s %-12s  %-22s  %s",
-      icons.status(status), issue.key, status:sub(1, 22), summary),
+    display = string.format("%s %-12s  %-22s  %s", icons.status(status), issue.key, status:sub(1, 22), summary),
     ordinal = issue.key .. " " .. status .. " " .. summary,
   }
 end

@@ -17,6 +17,8 @@ function M.setup(opts)
   cfg = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
 end
 
-function M.get() return cfg end
+function M.get()
+  return cfg
+end
 
 return M

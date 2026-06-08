@@ -19,8 +19,12 @@ local list_cache = {
 
 local function cache_notify(new_issues, done, err)
   local subs = list_cache.subscribers
-  if done then list_cache.subscribers = {} end
-  for _, sub in ipairs(subs) do pcall(sub, new_issues, done, err) end
+  if done then
+    list_cache.subscribers = {}
+  end
+  for _, sub in ipairs(subs) do
+    pcall(sub, new_issues, done, err)
+  end
 end
 
 local global_fetch_session = 0
@@ -29,11 +33,22 @@ local S = {}
 
 local function reset_state()
   S = {
-    prompt_win = nil, results_win = nil, detail_win = nil,
-    prompt_buf = nil, results_buf = nil, detail_buf = nil,
-    all_issues = {}, filtered = {}, detail_cache = {},
-    selected_idx = 0, fetch_session = 0, fetch_done = false,
-    autocmds = {}, ns = nil, focus = "prompt", closed = false,
+    prompt_win = nil,
+    results_win = nil,
+    detail_win = nil,
+    prompt_buf = nil,
+    results_buf = nil,
+    detail_buf = nil,
+    all_issues = {},
+    filtered = {},
+    detail_cache = {},
+    selected_idx = 0,
+    fetch_session = 0,
+    fetch_done = false,
+    autocmds = {},
+    ns = nil,
+    focus = "prompt",
+    closed = false,
     truncated = false,
   }
 end
@@ -45,13 +60,21 @@ local function safe_del_autocmd(id)
 end
 
 local function close_all()
-  if S.closed then return end
-  S.closed = true
-  pcall(function() require("ledger.xray.help").close() end)
-  if S.detail_buf then
-    pcall(function() require("ledger.xray.editor").detach(S.detail_buf) end)
+  if S.closed then
+    return
   end
-  for _, id in ipairs(S.autocmds) do safe_del_autocmd(id) end
+  S.closed = true
+  pcall(function()
+    require("ledger.xray.help").close()
+  end)
+  if S.detail_buf then
+    pcall(function()
+      require("ledger.xray.editor").detach(S.detail_buf)
+    end)
+  end
+  for _, id in ipairs(S.autocmds) do
+    safe_del_autocmd(id)
+  end
   for _, win in ipairs({ S.prompt_win, S.results_win, S.detail_win }) do
     if win and vim.api.nvim_win_is_valid(win) then
       pcall(vim.api.nvim_win_close, win, true)
@@ -81,7 +104,9 @@ local function make_display(issue)
 end
 
 local function render_results()
-  if not S.results_buf or not vim.api.nvim_buf_is_valid(S.results_buf) then return end
+  if not S.results_buf or not vim.api.nvim_buf_is_valid(S.results_buf) then
+    return
+  end
   local lines = {}
   if #S.filtered == 0 then
     lines = { "  (no matches)" }
@@ -131,13 +156,17 @@ local function render_detail(issue)
 end
 
 local function update_detail()
-  if not S.detail_buf or not vim.api.nvim_buf_is_valid(S.detail_buf) then return end
+  if not S.detail_buf or not vim.api.nvim_buf_is_valid(S.detail_buf) then
+    return
+  end
   if #S.filtered == 0 then
     render_detail_content({ "", "  (no selection)" }, {})
     return
   end
   local issue = S.filtered[S.selected_idx]
-  if not issue then return end
+  if not issue then
+    return
+  end
   local key = issue.key
 
   if S.detail_cache[key] then
@@ -161,29 +190,35 @@ local function update_detail()
 end
 
 local FIELD_ALIAS = {
-  assignee   = "assignee",
-  owner      = "assignee",
-  who        = "assignee",
-  status     = "status",
-  state      = "status",
-  type       = "issuetype",
-  issuetype  = "issuetype",
-  priority   = "priority",
-  platform   = "platforms",
-  platforms  = "platforms",
-  team       = "team",
-  automated  = "automated",
+  assignee = "assignee",
+  owner = "assignee",
+  who = "assignee",
+  status = "status",
+  state = "status",
+  type = "issuetype",
+  issuetype = "issuetype",
+  priority = "priority",
+  platform = "platforms",
+  platforms = "platforms",
+  team = "team",
+  automated = "automated",
   automation = "automated",
 }
 
 local function resolve_field_alias(name)
   name = name:lower()
-  if FIELD_ALIAS[name] then return FIELD_ALIAS[name] end
-  if #name < 3 then return nil end
+  if FIELD_ALIAS[name] then
+    return FIELD_ALIAS[name]
+  end
+  if #name < 3 then
+    return nil
+  end
   local canon = nil
   for alias, c in pairs(FIELD_ALIAS) do
     if alias:sub(1, #name) == name then
-      if canon and canon ~= c then return nil end
+      if canon and canon ~= c then
+        return nil
+      end
       canon = c
     end
   end
@@ -192,7 +227,9 @@ end
 
 local function list_values(field, sep)
   sep = sep or " "
-  if type(field) ~= "table" then return "" end
+  if type(field) ~= "table" then
+    return ""
+  end
   local bits = {}
   for _, v in ipairs(field) do
     if type(v) == "table" and v.value then
@@ -208,7 +245,9 @@ local function field_haystack(issue, canon)
   local f = issue.fields or {}
   if canon == "assignee" then
     local a = f.assignee
-    if type(a) ~= "table" then return "" end
+    if type(a) ~= "table" then
+      return ""
+    end
     return ((a.displayName or "") .. " " .. (a.emailAddress or "")):lower()
   elseif canon == "status" then
     return ((type(f.status) == "table" and f.status.name) or ""):lower()
@@ -264,15 +303,21 @@ local function filter_issues(query)
       local f = issue.fields or {}
       local status = (type(f.status) == "table" and f.status.name) or ""
       local hay = (issue.key .. " " .. status .. " " .. (f.summary or "")):lower()
-      if not hay:find(general, 1, true) then match = false end
+      if not hay:find(general, 1, true) then
+        match = false
+      end
     end
-    if match then table.insert(filtered, issue) end
+    if match then
+      table.insert(filtered, issue)
+    end
   end
   S.filtered = filtered
 end
 
 local function get_query()
-  if not S.prompt_buf or not vim.api.nvim_buf_is_valid(S.prompt_buf) then return "" end
+  if not S.prompt_buf or not vim.api.nvim_buf_is_valid(S.prompt_buf) then
+    return ""
+  end
   local lines = vim.api.nvim_buf_get_lines(S.prompt_buf, 0, 1, false)
   return (lines[1] or ""):gsub("^> ", "")
 end
@@ -292,22 +337,30 @@ local function on_prompt_changed()
 end
 
 local function move_selection(delta)
-  if #S.filtered == 0 then return end
+  if #S.filtered == 0 then
+    return
+  end
   S.selected_idx = math.max(1, math.min(#S.filtered, S.selected_idx + delta))
   render_results()
   update_detail()
 end
 
 local function focus_detail()
-  if not S.detail_win or not vim.api.nvim_win_is_valid(S.detail_win) then return end
-  if #S.filtered == 0 then return end
+  if not S.detail_win or not vim.api.nvim_win_is_valid(S.detail_win) then
+    return
+  end
+  if #S.filtered == 0 then
+    return
+  end
   S.focus = "detail"
   vim.api.nvim_set_current_win(S.detail_win)
   vim.cmd("stopinsert")
 end
 
 local function focus_prompt_insert()
-  if not S.prompt_win or not vim.api.nvim_win_is_valid(S.prompt_win) then return end
+  if not S.prompt_win or not vim.api.nvim_win_is_valid(S.prompt_win) then
+    return
+  end
   S.focus = "prompt"
   vim.api.nvim_set_current_win(S.prompt_win)
   vim.cmd("startinsert!")
@@ -316,21 +369,29 @@ local function focus_prompt_insert()
 end
 
 local function selected_issue()
-  if #S.filtered == 0 then return nil end
+  if #S.filtered == 0 then
+    return nil
+  end
   return S.filtered[S.selected_idx]
 end
 
 local function do_insert_at_cursor()
   local issue = selected_issue()
-  if not issue then return end
+  if not issue then
+    return
+  end
   local key = issue.key
   close_all()
-  vim.schedule(function() insert_mod.smart_insert(key) end)
+  vim.schedule(function()
+    insert_mod.smart_insert(key)
+  end)
 end
 
 local function do_yank()
   local issue = selected_issue()
-  if not issue then return end
+  if not issue then
+    return
+  end
   vim.fn.setreg("+", issue.key)
   vim.fn.setreg('"', issue.key)
   vim.notify("xray: yanked " .. issue.key, vim.log.levels.INFO)
@@ -338,7 +399,9 @@ end
 
 local function do_browse()
   local issue = selected_issue()
-  if not issue then return end
+  if not issue then
+    return
+  end
   util.open_url(util.ticket_url(issue.key))
 end
 
@@ -347,7 +410,9 @@ local function do_help()
 end
 
 local function scroll_detail(lines)
-  if not S.detail_win or not vim.api.nvim_win_is_valid(S.detail_win) then return end
+  if not S.detail_win or not vim.api.nvim_win_is_valid(S.detail_win) then
+    return
+  end
   local key = lines > 0 and "\x05" or "\x19" -- <C-e> / <C-y>
   pcall(vim.api.nvim_win_call, S.detail_win, function()
     vim.cmd("normal! " .. math.abs(lines) .. key)
@@ -369,7 +434,9 @@ end
 
 local function handle_mouse_click()
   local pos = vim.fn.getmousepos()
-  if not pos or not pos.winid or pos.winid == 0 then return end
+  if not pos or not pos.winid or pos.winid == 0 then
+    return
+  end
 
   if pos.winid == S.results_win then
     if pos.line and pos.line >= 1 and pos.line <= #S.filtered then
@@ -383,15 +450,18 @@ local function handle_mouse_click()
     S.focus = "detail"
     vim.api.nvim_set_current_win(S.detail_win)
     vim.cmd("stopinsert")
-    pcall(vim.api.nvim_win_set_cursor, S.detail_win,
-      { pos.line > 0 and pos.line or 1, pos.column - 1 })
+    pcall(vim.api.nvim_win_set_cursor, S.detail_win, { pos.line > 0 and pos.line or 1, pos.column - 1 })
   end
 end
 
 local function setup_prompt_keymaps(buf)
   local o = { buffer = buf, nowait = true, silent = true }
-  local down = function() move_selection(1) end
-  local up = function() move_selection(-1) end
+  local down = function()
+    move_selection(1)
+  end
+  local up = function()
+    move_selection(-1)
+  end
 
   vim.keymap.set("n", "<Esc>", close_all, o)
   vim.keymap.set("n", "q", close_all, o)
@@ -407,8 +477,12 @@ local function setup_prompt_keymaps(buf)
   vim.keymap.set("n", "j", down, o)
   vim.keymap.set("n", "k", up, o)
 
-  vim.keymap.set({ "i", "n" }, "<ScrollWheelDown>", function() smart_scroll(3) end, o)
-  vim.keymap.set({ "i", "n" }, "<ScrollWheelUp>", function() smart_scroll(-3) end, o)
+  vim.keymap.set({ "i", "n" }, "<ScrollWheelDown>", function()
+    smart_scroll(3)
+  end, o)
+  vim.keymap.set({ "i", "n" }, "<ScrollWheelUp>", function()
+    smart_scroll(-3)
+  end, o)
 
   vim.keymap.set({ "i", "n" }, "<LeftMouse>", handle_mouse_click, o)
 
@@ -432,18 +506,28 @@ local function setup_detail_keymaps(buf)
   vim.keymap.set("n", "b", do_browse, o)
   vim.keymap.set("n", "?", do_help, o)
   vim.keymap.set("n", "K", "<Nop>", o)
-  vim.keymap.set("n", "<ScrollWheelDown>", function() scroll_detail(3) end, o)
-  vim.keymap.set("n", "<ScrollWheelUp>", function() scroll_detail(-3) end, o)
-  vim.keymap.set("n", "<C-l>", function() vim.cmd("redraw!") end, o)
+  vim.keymap.set("n", "<ScrollWheelDown>", function()
+    scroll_detail(3)
+  end, o)
+  vim.keymap.set("n", "<ScrollWheelUp>", function()
+    scroll_detail(-3)
+  end, o)
+  vim.keymap.set("n", "<C-l>", function()
+    vim.cmd("redraw!")
+  end, o)
 
   require("ledger.xray.editor").attach(buf, S.detail_win, {}, {
     on_activate = function(r)
       local issue = selected_issue()
-      if not issue then return end
+      if not issue then
+        return
+      end
       require("ledger.xray.edit").dispatch(r, {
         key = issue.key,
         on_status_change = function(new_status)
-          if S.closed then return end
+          if S.closed then
+            return
+          end
           for _, i in ipairs(S.all_issues) do
             if i.key == issue.key then
               i.fields = i.fields or {}
@@ -455,7 +539,9 @@ local function setup_detail_keymaps(buf)
           render_results()
         end,
         on_refresh = function()
-          if S.closed then return end
+          if S.closed then
+            return
+          end
           S.detail_cache[issue.key] = nil
           update_detail()
         end,
@@ -467,28 +553,32 @@ end
 local function setup_results_keymaps(buf)
   local o = { buffer = buf, nowait = true, silent = true }
   vim.keymap.set("n", "<LeftMouse>", handle_mouse_click, o)
-  vim.keymap.set("n", "<ScrollWheelDown>", function() smart_scroll(3) end, o)
-  vim.keymap.set("n", "<ScrollWheelUp>", function() smart_scroll(-3) end, o)
+  vim.keymap.set("n", "<ScrollWheelDown>", function()
+    smart_scroll(3)
+  end, o)
+  vim.keymap.set("n", "<ScrollWheelUp>", function()
+    smart_scroll(-3)
+  end, o)
   vim.keymap.set("n", "q", close_all, o)
   vim.keymap.set("n", "<Esc>", close_all, o)
 end
 
 local function update_title(loaded, done, truncated)
-  if not S.prompt_win or not vim.api.nvim_win_is_valid(S.prompt_win) then return end
+  if not S.prompt_win or not vim.api.nvim_win_is_valid(S.prompt_win) then
+    return
+  end
   local state_str = done and "loaded" or "loading…"
   local marker = done and (icons.status("Done") .. " ") or (icons.ACTION.search .. " ")
-  local title = string.format(" %s Xray B2CQA — %d %s%s ",
-    marker, loaded, state_str, truncated and " (truncated)" or "")
+  local title =
+    string.format(" %s Xray B2CQA — %d %s%s ", marker, loaded, state_str, truncated and " (truncated)" or "")
   local title_hl = done and "XrayTitleLoaded" or "XrayTitleLoading"
   local border_hl = done and "XrayBorderLoaded" or "XrayBorderLoading"
   local cfg = vim.api.nvim_win_get_config(S.prompt_win)
   cfg.title = { { title, title_hl } }
   pcall(vim.api.nvim_win_set_config, S.prompt_win, cfg)
   pcall(function()
-    vim.wo[S.prompt_win].winhighlight = string.format(
-      "FloatTitle:%s,FloatBorder:%s,NormalFloat:XrayNormal",
-      title_hl, border_hl
-    )
+    vim.wo[S.prompt_win].winhighlight =
+      string.format("FloatTitle:%s,FloatBorder:%s,NormalFloat:XrayNormal", title_hl, border_hl)
   end)
 end
 
@@ -576,39 +666,49 @@ local function create_windows()
   setup_results_keymaps(S.results_buf)
   setup_detail_keymaps(S.detail_buf)
 
-  table.insert(S.autocmds, vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-    buffer = S.prompt_buf,
-    callback = function()
-      local line = vim.api.nvim_buf_get_lines(S.prompt_buf, 0, 1, false)[1] or ""
-      if not line:match("^> ") then
-        vim.api.nvim_buf_set_lines(S.prompt_buf, 0, 1, false, { "> " .. line })
-        pcall(vim.api.nvim_win_set_cursor, S.prompt_win, { 1, #line + 2 })
-      end
-      on_prompt_changed()
-    end,
-  }))
+  table.insert(
+    S.autocmds,
+    vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+      buffer = S.prompt_buf,
+      callback = function()
+        local line = vim.api.nvim_buf_get_lines(S.prompt_buf, 0, 1, false)[1] or ""
+        if not line:match("^> ") then
+          vim.api.nvim_buf_set_lines(S.prompt_buf, 0, 1, false, { "> " .. line })
+          pcall(vim.api.nvim_win_set_cursor, S.prompt_win, { 1, #line + 2 })
+        end
+        on_prompt_changed()
+      end,
+    })
+  )
 
-  table.insert(S.autocmds, vim.api.nvim_create_autocmd("WinClosed", {
-    callback = function(args)
-      local win = tonumber(args.match)
-      if win == S.prompt_win or win == S.results_win or win == S.detail_win then
-        vim.schedule(close_all)
-      end
-    end,
-  }))
+  table.insert(
+    S.autocmds,
+    vim.api.nvim_create_autocmd("WinClosed", {
+      callback = function(args)
+        local win = tonumber(args.match)
+        if win == S.prompt_win or win == S.results_win or win == S.detail_win then
+          vim.schedule(close_all)
+        end
+      end,
+    })
+  )
 end
 
 local function list_cache_fresh()
-  return list_cache.issues
-    and #list_cache.issues > 0
-    and (os.time() - list_cache.at) < LIST_CACHE_TTL
+  return list_cache.issues and #list_cache.issues > 0 and (os.time() - list_cache.at) < LIST_CACHE_TTL
 end
 
 local function start_prefetch()
-  if list_cache.state == "loading" then return end
-  if list_cache.state == "done" and list_cache_fresh() then return end
+  if list_cache.state == "loading" then
+    return
+  end
+  if list_cache.state == "done" and list_cache_fresh() then
+    return
+  end
   local creds = select(1, config.credentials())
-  if not creds then return end
+  if not creds then
+    return
+  end
 
   list_cache.state = "loading"
   list_cache.issues = {}
@@ -617,25 +717,31 @@ local function start_prefetch()
 
   local jql = api_jira.build_jql(config.options.project_key, "")
   local search_fields = table.concat({
-    "summary", "status", "issuetype", "assignee", "priority",
-    "customfield_10977", "customfield_10975", "customfield_10971", "customfield_10976",
+    "summary",
+    "status",
+    "issuetype",
+    "assignee",
+    "priority",
+    "customfield_10977",
+    "customfield_10975",
+    "customfield_10971",
+    "customfield_10976",
   }, ",")
   api_jira.search_all(jql, {
     page_cap = 50,
     max_results = 100,
     fields = search_fields,
-  },
-    function(issues, _)
-      for _, i in ipairs(issues) do table.insert(list_cache.issues, i) end
-      list_cache.at = os.time()
-      cache_notify(issues, false, nil)
-    end,
-    function(err, meta)
-      list_cache.state = "done"
-      list_cache.truncated = meta and meta.truncated or false
-      cache_notify({}, true, err)
+  }, function(issues, _)
+    for _, i in ipairs(issues) do
+      table.insert(list_cache.issues, i)
     end
-  )
+    list_cache.at = os.time()
+    cache_notify(issues, false, nil)
+  end, function(err, meta)
+    list_cache.state = "done"
+    list_cache.truncated = meta and meta.truncated or false
+    cache_notify({}, true, err)
+  end)
 end
 
 local function start_fetch(force)
@@ -652,7 +758,9 @@ local function start_fetch(force)
   end
 
   if list_cache.issues and #list_cache.issues > 0 then
-    for _, i in ipairs(list_cache.issues) do table.insert(S.all_issues, i) end
+    for _, i in ipairs(list_cache.issues) do
+      table.insert(S.all_issues, i)
+    end
   end
 
   local is_done = list_cache.state == "done" and list_cache_fresh()
@@ -668,15 +776,21 @@ local function start_fetch(force)
   end
 
   table.insert(list_cache.subscribers, function(new_issues, done, err)
-    if session ~= global_fetch_session or S.closed then return end
+    if session ~= global_fetch_session or S.closed then
+      return
+    end
     if err then
       vim.notify(err, vim.log.levels.WARN)
       return
     end
-    for _, i in ipairs(new_issues) do table.insert(S.all_issues, i) end
+    for _, i in ipairs(new_issues) do
+      table.insert(S.all_issues, i)
+    end
     on_prompt_changed()
     update_title(#S.all_issues, done, list_cache.truncated)
-    if done then S.fetch_done = true end
+    if done then
+      S.fetch_done = true
+    end
   end)
 end
 

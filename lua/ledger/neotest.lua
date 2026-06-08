@@ -45,10 +45,7 @@ local function get_seed()
     _seed_cache = result:gsub("%s+$", "")
     return _seed_cache
   end
-  vim.notify(
-    "SEED not available — check keychain item 'ledger-e2e-seed' or export SEED",
-    vim.log.levels.WARN
-  )
+  vim.notify("SEED not available — check keychain item 'ledger-e2e-seed' or export SEED", vim.log.levels.WARN)
   return ""
 end
 
@@ -167,21 +164,23 @@ function M.apply(opts)
     return {}
   end
 
-  opts.floating = opts.floating or {
-    border = "rounded",
-    options = {
-      winhighlight = "FloatBorder:XrayBorder,NormalFloat:XrayNormal",
-    },
-  }
+  opts.floating = opts.floating
+    or {
+      border = "rounded",
+      options = {
+        winhighlight = "FloatBorder:XrayBorder,NormalFloat:XrayNormal",
+      },
+    }
 
   opts.adapters = opts.adapters or {}
 
-  opts.adapters["neotest-vitest"] = opts.adapters["neotest-vitest"] or {
-    command = "npx vitest",
-    cwd = function(path)
-      return require("lspconfig.util").root_pattern("vitest.config.ts", "package.json", ".git")(path)
-    end,
-  }
+  opts.adapters["neotest-vitest"] = opts.adapters["neotest-vitest"]
+    or {
+      command = "npx vitest",
+      cwd = function(path)
+        return require("lspconfig.util").root_pattern("vitest.config.ts", "package.json", ".git")(path)
+      end,
+    }
 
   opts.adapters["neotest-ctest"] = opts.adapters["neotest-ctest"] or {}
 

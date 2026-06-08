@@ -4,18 +4,26 @@ local store = require("ledger.jira.board.store")
 local card = require("ledger.jira.board.ui.card")
 local cfg = require("ledger.jira.board.config")
 
-local function dw(s) return vim.fn.strdisplaywidth(s or "") end
+local function dw(s)
+  return vim.fn.strdisplaywidth(s or "")
+end
 
 local function pad_right(s, w)
   local n = w - dw(s)
-  if n <= 0 then return s end
+  if n <= 0 then
+    return s
+  end
   return s .. string.rep(" ", n)
 end
 
 local function truncate(s, w)
   s = s or ""
-  if dw(s) <= w then return s end
-  if w <= 1 then return "…" end
+  if dw(s) <= w then
+    return s
+  end
+  if w <= 1 then
+    return "…"
+  end
   return s:sub(1, math.max(0, w - 1)) .. "…"
 end
 
@@ -24,8 +32,12 @@ local function compute_col_width(screen_w, ncols)
   local usable = screen_w - 2
   local w = math.floor(usable / math.max(1, ncols)) - pad
   local c = cfg.get()
-  if w < c.card_min_width then w = c.card_min_width end
-  if w > c.card_max_width then w = c.card_max_width end
+  if w < c.card_min_width then
+    w = c.card_min_width
+  end
+  if w > c.card_max_width then
+    w = c.card_max_width
+  end
   return w
 end
 
@@ -37,7 +49,9 @@ local function col_header_lines(col, count, col_w)
     title = truncate(title, left_budget)
   end
   local spacer = col_w - dw(title) - dw(right) - 2
-  if spacer < 1 then spacer = 1 end
+  if spacer < 1 then
+    spacer = 1
+  end
   local header = {
     { " ", "JiraBoardColHdr" },
     { title, "JiraBoardColHdr" },
@@ -46,7 +60,7 @@ local function col_header_lines(col, count, col_w)
     { " ", "JiraBoardColHdr" },
   }
   local rule = { { string.rep("─", col_w), "JiraBoardColRule" } }
-  local gap  = { { string.rep(" ", col_w), "JiraBoardColGap" } }
+  local gap = { { string.rep(" ", col_w), "JiraBoardColGap" } }
   return { header, rule, gap }
 end
 
@@ -57,7 +71,9 @@ end
 local function pad_columns(col_sections)
   local max_h = 0
   for _, s in ipairs(col_sections) do
-    if #s.lines > max_h then max_h = #s.lines end
+    if #s.lines > max_h then
+      max_h = #s.lines
+    end
   end
   for _, s in ipairs(col_sections) do
     while #s.lines < max_h do
@@ -81,23 +97,27 @@ local function epic_header_line(band, board_w, collapsed, toggle_action)
   local count_str = band.total == 1 and "1 issue" or (band.total .. " issues")
   local icon = collapsed and "▸ " or "▾ "
   local mid_budget = board_w - dw(icon) - dw(key) - dw(count_str) - 4
-  if mid_budget < 0 then mid_budget = 0 end
+  if mid_budget < 0 then
+    mid_budget = 0
+  end
   local sum_txt = ""
   if summary ~= "" and mid_budget > 3 then
     sum_txt = "  " .. truncate(summary, mid_budget - 2)
   end
   local used = dw(icon) + dw(key) + dw(sum_txt) + dw(count_str) + 2
   local spacer = board_w - used
-  if spacer < 1 then spacer = 1 end
+  if spacer < 1 then
+    spacer = 1
+  end
   local actions = toggle_action and { click = toggle_action } or nil
   return {
-    { " ",                         "JiraBoardEpicHdr", actions },
-    { icon,                        "JiraBoardEpicHdr", actions },
-    { key,                         "JiraBoardEpicHdr", actions },
-    { sum_txt,                     "JiraBoardEpicSum", actions },
-    { string.rep(" ", spacer),     "JiraBoardEpicHdr", actions },
-    { count_str,                   "JiraBoardEpicSum", actions },
-    { " ",                         "JiraBoardEpicHdr", actions },
+    { " ", "JiraBoardEpicHdr", actions },
+    { icon, "JiraBoardEpicHdr", actions },
+    { key, "JiraBoardEpicHdr", actions },
+    { sum_txt, "JiraBoardEpicSum", actions },
+    { string.rep(" ", spacer), "JiraBoardEpicHdr", actions },
+    { count_str, "JiraBoardEpicSum", actions },
+    { " ", "JiraBoardEpicHdr", actions },
   }
 end
 
@@ -153,7 +173,9 @@ local function build_band(band, band_idx, vcols, col_w, board_w, selected_card_k
           end,
         }
         local crendered = card.render(issue, col_w, is_sel, actions, status_actions)
-        for _, l in ipairs(crendered) do table.insert(col_lines, l) end
+        for _, l in ipairs(crendered) do
+          table.insert(col_lines, l)
+        end
       end
     end
     table.insert(col_sections, { w = col_w, pad = 0, lines = col_lines })
@@ -171,7 +193,9 @@ local function build_band(band, band_idx, vcols, col_w, board_w, selected_card_k
   end
   local grid_col = require("volt.ui.grid_col")
   local body = grid_col(interleaved)
-  for _, l in ipairs(body) do table.insert(lines, l) end
+  for _, l in ipairs(body) do
+    table.insert(lines, l)
+  end
 
   return {
     lines = lines,
@@ -204,12 +228,16 @@ function M.build(opts)
     local start_row = #grid -- 0-based first line of this band within grid
     local collapsed = store.is_epic_collapsed(band.key)
     local built = build_band(band, i, vcols, col_w, board_w, opts.selected_card_key, collapsed)
-    for _, l in ipairs(built.lines) do table.insert(grid, l) end
+    for _, l in ipairs(built.lines) do
+      table.insert(grid, l)
+    end
     -- When collapsed, expose an empty issues_by_col so navigation skips over it.
     local visible_issues_by_col = band.issues_by_col
     if collapsed then
       visible_issues_by_col = {}
-      for vi = 1, #vcols do visible_issues_by_col[vi] = {} end
+      for vi = 1, #vcols do
+        visible_issues_by_col[vi] = {}
+      end
     end
     table.insert(band_meta, {
       key = band.key,

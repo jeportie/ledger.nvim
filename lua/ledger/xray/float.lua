@@ -8,7 +8,9 @@ local function compute_size(lines)
   local content_w = 0
   for _, line in ipairs(lines) do
     local w = vim.fn.strdisplaywidth(line)
-    if w > content_w then content_w = w end
+    if w > content_w then
+      content_w = w
+    end
   end
   local min_w = 40
   local max_w = math.max(min_w, math.floor(vim.o.columns * 0.9))
@@ -29,7 +31,9 @@ local function normalize(arg)
 end
 
 function M.update(buf, content)
-  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
   local lines, highlights = normalize(content)
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -42,7 +46,9 @@ function M.update(buf, content)
 end
 
 function M.apply_highlights(buf, highlights)
-  if not highlights or #highlights == 0 then return end
+  if not highlights or #highlights == 0 then
+    return
+  end
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   for _, h in ipairs(highlights) do
     pcall(vim.api.nvim_buf_set_extmark, buf, ns, h.line, h.col_start, {
@@ -103,9 +109,13 @@ function M.open(title, content, opts)
 
   local function close()
     if not opts.is_help then
-      pcall(function() require("ledger.xray.help").close() end)
+      pcall(function()
+        require("ledger.xray.help").close()
+      end)
     end
-    if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
   end
 
   local function map(keys, fn)
@@ -117,10 +127,14 @@ function M.open(title, content, opts)
   map({ "q", "<Esc>" }, close)
 
   for _, k in ipairs({
-    "<2-LeftMouse>", "<3-LeftMouse>", "<4-LeftMouse>",
-    "<RightMouse>", "<2-RightMouse>",
+    "<2-LeftMouse>",
+    "<3-LeftMouse>",
+    "<4-LeftMouse>",
+    "<RightMouse>",
+    "<2-RightMouse>",
     "<MiddleMouse>",
-    "<LeftDrag>", "<LeftRelease>",
+    "<LeftDrag>",
+    "<LeftRelease>",
   }) do
     vim.keymap.set("n", k, "<Nop>", { buffer = buf, nowait = true, silent = true })
   end

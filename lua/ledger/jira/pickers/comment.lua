@@ -10,7 +10,9 @@ local function is_open()
 end
 
 local function destroy(restore)
-  if not _state then return end
+  if not _state then
+    return
+  end
   local buf = _state.buf
   local win = _state.win
   local parent_win = _state.parent_win
@@ -27,11 +29,15 @@ local function destroy(restore)
 end
 
 local function cancel_and_close(restore)
-  if not _state then return end
+  if not _state then
+    return
+  end
   local on_done = _state.on_done
   _state.on_done = nil
   destroy(restore)
-  if on_done then pcall(on_done, nil, nil) end
+  if on_done then
+    pcall(on_done, nil, nil)
+  end
 end
 
 local function text_to_adf(text)
@@ -49,12 +55,16 @@ local function text_to_adf(text)
   while #paragraphs > 0 and not paragraphs[#paragraphs].content do
     table.remove(paragraphs)
   end
-  if #paragraphs == 0 then return nil end
+  if #paragraphs == 0 then
+    return nil
+  end
   return { type = "doc", version = 1, content = paragraphs }
 end
 
 local function submit()
-  if not _state then return end
+  if not _state then
+    return
+  end
   local buf = _state.buf
   local key = _state.key
 
@@ -78,11 +88,15 @@ local function submit()
   api.add_comment(key, adf, function(_, err)
     if err then
       vim.notify(err, vim.log.levels.ERROR)
-      if on_done then pcall(on_done, nil, err) end
+      if on_done then
+        pcall(on_done, nil, err)
+      end
       return
     end
     vim.notify("xray: comment added to " .. key, vim.log.levels.INFO)
-    if on_done then pcall(on_done, true, nil) end
+    if on_done then
+      pcall(on_done, true, nil)
+    end
   end)
 end
 
@@ -93,7 +107,9 @@ end
 -- on_done(true, nil) on success, (nil, err) on failure, (nil, nil) on cancel
 function M.open(key, on_done, opts)
   opts = opts or {}
-  if is_open() then destroy() end
+  if is_open() then
+    destroy()
+  end
   local parent_win = vim.api.nvim_get_current_win()
   _state = { key = key, on_done = on_done, parent_win = parent_win }
 
@@ -146,7 +162,9 @@ function M.open(key, on_done, opts)
   vim.api.nvim_create_autocmd("WinClosed", {
     group = aug,
     callback = function(args)
-      if not _state then return end
+      if not _state then
+        return
+      end
       if tonumber(args.match) == _state.win then
         vim.schedule(cancel_and_close)
       end
@@ -157,7 +175,9 @@ function M.open(key, on_done, opts)
     buffer = buf,
     callback = function()
       vim.schedule(function()
-        if not _state then return end
+        if not _state then
+          return
+        end
         cancel_and_close(false)
       end)
     end,

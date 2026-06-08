@@ -3,23 +3,27 @@ local M = {}
 local config = require("ledger.xray.config")
 local jira_util = require("ledger.jira.util")
 
-M.ticket_url          = jira_util.ticket_url
-M.open_url            = jira_util.open_url
+M.ticket_url = jira_util.ticket_url
+M.open_url = jira_util.open_url
 M.screen_cursor_anchor = jira_util.screen_cursor_anchor
-M.clean_float_window  = jira_util.clean_float_window
-M.disable_completion  = jira_util.disable_completion
+M.clean_float_window = jira_util.clean_float_window
+M.disable_completion = jira_util.disable_completion
 
 M.id_pattern = "B2CQA%-%d+"
 
 function M.extract_id(s)
-  if not s or s == "" then return nil end
+  if not s or s == "" then
+    return nil
+  end
   return s:match(M.id_pattern)
 end
 
 function M.cword_id()
   local word = vim.fn.expand("<cWORD>")
   local id = M.extract_id(word)
-  if id then return id end
+  if id then
+    return id
+  end
   return M.extract_id(vim.fn.expand("<cword>"))
 end
 
@@ -61,10 +65,16 @@ function M.find_ledger_live_root(start)
   dir = dir:gsub("/+$", "")
 
   for _ = 1, 12 do
-    if dir == "" or dir == "/" then break end
-    if is_ledger_live_root(dir) then return dir end
+    if dir == "" or dir == "/" then
+      break
+    end
+    if is_ledger_live_root(dir) then
+      return dir
+    end
     local parent = vim.fn.fnamemodify(dir, ":h")
-    if parent == dir then break end
+    if parent == dir then
+      break
+    end
     dir = parent
   end
 

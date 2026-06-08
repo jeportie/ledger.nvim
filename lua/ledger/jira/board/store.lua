@@ -13,9 +13,9 @@ local function fresh()
     -- Multi-category filter sets. Key = value, Val = label string.
     filters = {
       assignees = {},
-      epics     = {},
-      types     = {},
-      labels    = {},
+      epics = {},
+      types = {},
+      labels = {},
     },
     hide_backlog = false,
     collapsed_epics = {}, -- set keyed by epic key ("" for "No Epic" bucket)
@@ -27,7 +27,9 @@ end
 
 M.state = fresh()
 
-function M.reset() M.state = fresh() end
+function M.reset()
+  M.state = fresh()
+end
 
 function M.set_board(id, name)
   M.state.board_id = id
@@ -62,19 +64,25 @@ end
 
 -- Replace a filter category entirely. values is a map {id = label}.
 function M.set_filter_category(category, values)
-  if not M.state.filters[category] then return end
+  if not M.state.filters[category] then
+    return
+  end
   M.state.filters[category] = values or {}
 end
 
 function M.clear_filters()
-  for cat in pairs(M.state.filters) do M.state.filters[cat] = {} end
+  for cat in pairs(M.state.filters) do
+    M.state.filters[cat] = {}
+  end
   M.state.filter_assignee = nil
   M.state.filter_assignee_label = nil
 end
 
 function M.has_active_filters()
   for _, set in pairs(M.state.filters) do
-    if next(set) ~= nil then return true end
+    if next(set) ~= nil then
+      return true
+    end
   end
   return M.state.filter_assignee ~= nil
 end
@@ -83,8 +91,12 @@ function M.filter_summary()
   local bits = {}
   for cat, set in pairs(M.state.filters) do
     local n = 0
-    for _ in pairs(set) do n = n + 1 end
-    if n > 0 then table.insert(bits, cat .. ":" .. n) end
+    for _ in pairs(set) do
+      n = n + 1
+    end
+    if n > 0 then
+      table.insert(bits, cat .. ":" .. n)
+    end
   end
   return bits
 end
@@ -94,7 +106,9 @@ function M.toggle_backlog()
   return M.state.hide_backlog
 end
 
-local function epic_slot(key) return key or "__no_epic__" end
+local function epic_slot(key)
+  return key or "__no_epic__"
+end
 
 function M.is_epic_collapsed(key)
   return M.state.collapsed_epics[epic_slot(key)] == true
@@ -122,9 +136,13 @@ end
 -- True when there is at least one epic and every epic is collapsed.
 function M.all_epics_collapsed()
   local bands = M.epic_groups() or {}
-  if #bands == 0 then return false end
+  if #bands == 0 then
+    return false
+  end
   for _, b in ipairs(bands) do
-    if not M.state.collapsed_epics[epic_slot(b.key)] then return false end
+    if not M.state.collapsed_epics[epic_slot(b.key)] then
+      return false
+    end
   end
   return true
 end
@@ -142,9 +160,13 @@ end
 function M.visible_column_index(original_idx)
   local visible = M.visible_columns()
   local col = M.state.columns[original_idx]
-  if not col then return nil end
+  if not col then
+    return nil
+  end
   for i, v in ipairs(visible) do
-    if v == col then return i end
+    if v == col then
+      return i
+    end
   end
   return nil
 end
@@ -152,15 +174,21 @@ end
 function M.original_column_index(visible_idx)
   local visible = M.visible_columns()
   local col = visible[visible_idx]
-  if not col then return nil end
+  if not col then
+    return nil
+  end
   for i, c in ipairs(M.state.columns) do
-    if c == col then return i end
+    if c == col then
+      return i
+    end
   end
   return nil
 end
 
 local function present(v)
-  if v == nil or v == vim.NIL then return nil end
+  if v == nil or v == vim.NIL then
+    return nil
+  end
   return v
 end
 
@@ -183,40 +211,59 @@ local function issue_matches_filters(issue)
   if set_has(f.assignees) then
     local a = present(fields.assignee)
     local aid = a and present(a.accountId) or nil
-    if not (aid and f.assignees[aid]) then return false end
+    if not (aid and f.assignees[aid]) then
+      return false
+    end
   end
 
   if set_has(f.types) then
     local it = present(fields.issuetype)
     local name = it and present(it.name) or nil
-    if not (name and f.types[name]) then return false end
+    if not (name and f.types[name]) then
+      return false
+    end
   end
 
   if set_has(f.labels) then
     local labels = fields.labels
-    if type(labels) ~= "table" or #labels == 0 then return false end
+    if type(labels) ~= "table" or #labels == 0 then
+      return false
+    end
     local ok = false
     for _, l in ipairs(labels) do
-      if f.labels[l] then ok = true; break end
+      if f.labels[l] then
+        ok = true
+        break
+      end
     end
-    if not ok then return false end
+    if not ok then
+      return false
+    end
   end
 
   if set_has(f.epics) then
     local parent = present(fields.parent)
     local pkey = parent and present(parent.key) or nil
-    if not (pkey and f.epics[pkey]) then return false end
+    if not (pkey and f.epics[pkey]) then
+      return false
+    end
   end
 
   return true
 end
 
 local function issues_matching(col)
-  if not col then return {} end
+  if not col then
+    return {}
+  end
   local ids = {}
-  for _, id in ipairs(col.status_ids or {}) do ids[tostring(id)] = true end
+  for _, id in ipairs(col.status_ids or {}) do
+    ids[tostring(id)] = true
+  end
   local names = {}
-  for _, st in ipairs(col.statuses or {}) do names[st] = true end
+  for _, st in ipairs(col.statuses or {}) do
+    names[st] = true
+  end
 
   local out = {}
   for _, issue in ipairs(M.state.issues) do
@@ -231,9 +278,13 @@ local function issues_matching(col)
 
   -- Sort by epic key so same-epic issues are adjacent (stable fallback on key).
   table.sort(out, function(a, b)
-    local pa = present(a.fields and a.fields.parent); pa = pa and present(pa.key) or ""
-    local pb = present(b.fields and b.fields.parent); pb = pb and present(pb.key) or ""
-    if pa ~= pb then return pa < pb end
+    local pa = present(a.fields and a.fields.parent)
+    pa = pa and present(pa.key) or ""
+    local pb = present(b.fields and b.fields.parent)
+    pb = pb and present(pb.key) or ""
+    if pa ~= pb then
+      return pa < pb
+    end
     return (a.key or "") < (b.key or "")
   end)
   return out
@@ -278,7 +329,9 @@ function M.filter_options(category)
       end
     end
   end
-  table.sort(options, function(a, b) return a.label < b.label end)
+  table.sort(options, function(a, b)
+    return a.label < b.label
+  end)
   return options
 end
 
@@ -313,7 +366,9 @@ function M.visible_epics()
       end
     end
   end
-  table.sort(out, function(a, b) return a.key < b.key end)
+  table.sort(out, function(a, b)
+    return a.key < b.key
+  end)
   return out
 end
 
@@ -326,13 +381,17 @@ function M.epic_groups()
   local bands = {} -- key-indexed accumulator
   local order = {} -- stable order of seen epic keys
   local orphan = { key = nil, summary = "No Epic", issues_by_col = {}, total = 0 }
-  for i = 1, #vcols do orphan.issues_by_col[i] = {} end
+  for i = 1, #vcols do
+    orphan.issues_by_col[i] = {}
+  end
 
   local function ensure_band(key, summary)
     local b = bands[key]
     if not b then
       b = { key = key, summary = summary or "", issues_by_col = {}, total = 0 }
-      for i = 1, #vcols do b.issues_by_col[i] = {} end
+      for i = 1, #vcols do
+        b.issues_by_col[i] = {}
+      end
       bands[key] = b
       table.insert(order, key)
     end
@@ -357,8 +416,12 @@ function M.epic_groups()
 
   table.sort(order)
   local out = {}
-  for _, k in ipairs(order) do table.insert(out, bands[k]) end
-  if orphan.total > 0 then table.insert(out, orphan) end
+  for _, k in ipairs(order) do
+    table.insert(out, bands[k])
+  end
+  if orphan.total > 0 then
+    table.insert(out, orphan)
+  end
   return out
 end
 

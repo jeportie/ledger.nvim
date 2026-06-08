@@ -8,17 +8,28 @@ local jira_util = require("ledger.jira.util")
 local hl = require("ledger.jira.board.ui.hl")
 local icons = require("ledger.jira.icons")
 
-local function dw(s) return vim.fn.strdisplaywidth(s or "") end
+local function dw(s)
+  return vim.fn.strdisplaywidth(s or "")
+end
 
 local function present(v)
-  if v == nil or v == vim.NIL then return nil end
+  if v == nil or v == vim.NIL then
+    return nil
+  end
   return v
 end
 
 local function fresh_state()
-  return { buf = nil, win = nil, ns = nil,
-           key = nil, issue = nil, children = nil,
-           loading = false, error = nil }
+  return {
+    buf = nil,
+    win = nil,
+    ns = nil,
+    key = nil,
+    issue = nil,
+    children = nil,
+    loading = false,
+    error = nil,
+  }
 end
 
 -- _state = currently active (top-most) preview.
@@ -47,29 +58,43 @@ local function close()
     end
     -- Refresh the restored preview in case a fetch completed while it was
     -- pushed under a stacked child preview.
-    if rerender then pcall(rerender) end
+    if rerender then
+      pcall(rerender)
+    end
   else
     -- No previews left — restore board scroll.
-    pcall(function() require("ledger.jira.board.ui.window").unlock_scroll() end)
+    pcall(function()
+      require("ledger.jira.board.ui.window").unlock_scroll()
+    end)
   end
 end
 
 local function pad_right(s, w)
   local n = w - dw(s)
-  if n <= 0 then return s end
+  if n <= 0 then
+    return s
+  end
   return s .. string.rep(" ", n)
 end
 
 local function truncate(s, w)
   s = s or ""
-  if dw(s) <= w then return s end
-  if w <= 1 then return "…" end
+  if dw(s) <= w then
+    return s
+  end
+  if w <= 1 then
+    return "…"
+  end
   local total = vim.fn.strchars(s)
   local lo, hi = 0, total
   while lo < hi do
     local mid = math.floor((lo + hi + 1) / 2)
     local piece = vim.fn.strcharpart(s, 0, mid)
-    if dw(piece) <= w - 1 then lo = mid else hi = mid - 1 end
+    if dw(piece) <= w - 1 then
+      lo = mid
+    else
+      hi = mid - 1
+    end
   end
   return vim.fn.strcharpart(s, 0, lo) .. "…"
 end
@@ -86,7 +111,9 @@ local function wrap_text(s, w)
       table.insert(out, "")
     else
       local words = {}
-      for tok in string.gmatch(para, "%S+") do table.insert(words, tok) end
+      for tok in string.gmatch(para, "%S+") do
+        table.insert(words, tok)
+      end
       if #words == 0 then
         table.insert(out, "")
       else
@@ -96,11 +123,15 @@ local function wrap_text(s, w)
           if dw(candidate) <= w then
             cur = candidate
           else
-            if cur ~= "" then table.insert(out, cur) end
+            if cur ~= "" then
+              table.insert(out, cur)
+            end
             cur = dw(word) <= w and word or truncate(word, w)
           end
         end
-        if cur ~= "" then table.insert(out, cur) end
+        if cur ~= "" then
+          table.insert(out, cur)
+        end
       end
     end
   end
@@ -128,7 +159,9 @@ local function collect_focus_rows(buf)
     if list and #list > 0 and row > 2 then
       local min_col = math.huge
       for _, item in ipairs(list) do
-        if item.col_start < min_col then min_col = item.col_start end
+        if item.col_start < min_col then
+          min_col = item.col_start
+        end
       end
       table.insert(rows, {
         row = row,
@@ -137,14 +170,18 @@ local function collect_focus_rows(buf)
       })
     end
   end
-  table.sort(rows, function(a, b) return a.row < b.row end)
+  table.sort(rows, function(a, b)
+    return a.row < b.row
+  end)
   return rows
 end
 
 local function render_focus(buf, row)
   _state.focus_ns = _state.focus_ns or api.nvim_create_namespace("jira_board_preview_focus")
   pcall(api.nvim_buf_clear_namespace, buf, _state.focus_ns, 0, -1)
-  if not row then return end
+  if not row then
+    return
+  end
   pcall(api.nvim_buf_set_extmark, buf, _state.focus_ns, row - 1, 0, {
     line_hl_group = "JiraBoardFocus",
     priority = 200,
@@ -153,9 +190,13 @@ local function render_focus(buf, row)
 end
 
 local function set_focus(buf, target)
-  if not target then return end
+  if not target then
+    return
+  end
   local win = _state.win
-  if not (win and api.nvim_win_is_valid(win)) then return end
+  if not (win and api.nvim_win_is_valid(win)) then
+    return
+  end
   pcall(api.nvim_win_set_cursor, win, { target.row, target.col })
   render_focus(buf, target.row)
   _state.focus_row = target.row
@@ -164,21 +205,26 @@ end
 
 local function current_focus_idx(rows, cursor_row)
   for i, r in ipairs(rows) do
-    if r.row == cursor_row then return i end
+    if r.row == cursor_row then
+      return i
+    end
   end
   return nil
 end
 
 local function focus_nav(buf, mode)
   local rows = collect_focus_rows(buf)
-  if #rows == 0 then return end
+  if #rows == 0 then
+    return
+  end
   local win = _state.win
-  if not (win and api.nvim_win_is_valid(win)) then return end
+  if not (win and api.nvim_win_is_valid(win)) then
+    return
+  end
   local cursor = api.nvim_win_get_cursor(win)
   local cur_row = cursor[1]
   local cur_idx = current_focus_idx(rows, cur_row)
-  local cur_side = cur_idx and rows[cur_idx].side
-    or ((cursor[2] >= (_state.divider_col or 0)) and "right" or "left")
+  local cur_side = cur_idx and rows[cur_idx].side or ((cursor[2] >= (_state.divider_col or 0)) and "right" or "left")
 
   if mode == "toggle_side" then
     local new_side = (cur_side == "left") and "right" or "left"
@@ -186,7 +232,10 @@ local function focus_nav(buf, mode)
     for _, r in ipairs(rows) do
       if r.side == new_side then
         local d = math.abs(r.row - cur_row)
-        if d < best_dist then best_dist = d; best = r end
+        if d < best_dist then
+          best_dist = d
+          best = r
+        end
       end
     end
     set_focus(buf, best)
@@ -208,22 +257,33 @@ local function focus_nav(buf, mode)
   -- Fell off the edge — wrap to the first/last on this side.
   if step > 0 then
     for j = 1, #rows do
-      if rows[j].side == cur_side then set_focus(buf, rows[j]); return end
+      if rows[j].side == cur_side then
+        set_focus(buf, rows[j])
+        return
+      end
     end
   else
     for j = #rows, 1, -1 do
-      if rows[j].side == cur_side then set_focus(buf, rows[j]); return end
+      if rows[j].side == cur_side then
+        set_focus(buf, rows[j])
+        return
+      end
     end
   end
 end
 
 local function focus_first(buf)
   local rows = collect_focus_rows(buf)
-  if #rows == 0 then return end
+  if #rows == 0 then
+    return
+  end
   -- Prefer the first LEFT-side clickable so the user starts on the summary/
   -- description area; fall back to the first clickable.
   for _, r in ipairs(rows) do
-    if r.side == "left" then set_focus(buf, r); return end
+    if r.side == "left" then
+      set_focus(buf, r)
+      return
+    end
   end
   set_focus(buf, rows[1])
 end
@@ -232,7 +292,9 @@ end
 local function refresh_board_in_background()
   pcall(function()
     local win = require("ledger.jira.board.ui.window")
-    if win.is_open() then require("ledger.jira.board.actions").refresh() end
+    if win.is_open() then
+      require("ledger.jira.board.actions").refresh()
+    end
   end)
 end
 
@@ -240,13 +302,21 @@ end
 -- preview is still the active one.
 local function refresh_preview_issue(my_state)
   local key = my_state.key
-  if not key then return end
+  if not key then
+    return
+  end
   jira_api.get_issue(key, function(data, err)
     vim.schedule(function()
-      if not (my_state.buf and api.nvim_buf_is_valid(my_state.buf)) then return end
-      if err or not data then return end
+      if not (my_state.buf and api.nvim_buf_is_valid(my_state.buf)) then
+        return
+      end
+      if err or not data then
+        return
+      end
       my_state.issue = data
-      if my_state == _state and rerender then pcall(rerender) end
+      if my_state == _state and rerender then
+        pcall(rerender)
+      end
     end)
   end)
 end
@@ -254,12 +324,16 @@ end
 -- Open the status picker for the previewed issue without closing the preview.
 local function trigger_transition()
   local my_state = _state
-  if not (my_state and my_state.key) then return end
+  if not (my_state and my_state.key) then
+    return
+  end
   local issue = my_state.issue or {}
   local cur_status = issue.fields and issue.fields.status and issue.fields.status.name
   local status_picker = require("ledger.jira.pickers.status")
   status_picker.open(my_state.key, cur_status, function(to_name, err)
-    if err or not to_name then return end
+    if err or not to_name then
+      return
+    end
     vim.schedule(function()
       refresh_preview_issue(my_state)
       refresh_board_in_background()
@@ -270,7 +344,9 @@ end
 -- Open the assignee picker for the previewed issue without closing the preview.
 local function trigger_assign_other()
   local my_state = _state
-  if not (my_state and my_state.key) then return end
+  if not (my_state and my_state.key) then
+    return
+  end
   local picker = require("ledger.jira.pickers.assignee")
   local cur = my_state.issue and my_state.issue.fields and my_state.issue.fields.assignee
   local current_assignee = nil
@@ -278,7 +354,9 @@ local function trigger_assign_other()
     current_assignee = { accountId = cur.accountId }
   end
   picker.open(my_state.key, current_assignee, function(result, err)
-    if err or not result then return end
+    if err or not result then
+      return
+    end
     vim.schedule(function()
       refresh_preview_issue(my_state)
       refresh_board_in_background()
@@ -289,7 +367,9 @@ end
 -- Assign the previewed issue to the current user.
 local function trigger_assign_me()
   local my_state = _state
-  if not (my_state and my_state.key) then return end
+  if not (my_state and my_state.key) then
+    return
+  end
   local store = require("ledger.jira.board.store")
   local key = my_state.key
   local function do_assign(account_id)
@@ -311,7 +391,8 @@ local function trigger_assign_me()
     jira_api.get_myself(function(m, err)
       vim.schedule(function()
         if err or not m or not m.accountId then
-          vim.notify("jira-board: whoami failed — " .. tostring(err), vim.log.levels.ERROR); return
+          vim.notify("jira-board: whoami failed — " .. tostring(err), vim.log.levels.ERROR)
+          return
         end
         local urls = m.avatarUrls or {}
         local avatar_url = urls["48x48"] or urls["32x32"]
@@ -325,7 +406,9 @@ end
 -- Reporter — use the assignee picker with a custom setter.
 local function trigger_reporter()
   local my_state = _state
-  if not (my_state and my_state.key) then return end
+  if not (my_state and my_state.key) then
+    return
+  end
   local picker = require("ledger.jira.pickers.assignee")
   local cur = my_state.issue and my_state.issue.fields and my_state.issue.fields.reporter
   local current_reporter = nil
@@ -333,7 +416,9 @@ local function trigger_reporter()
     current_reporter = { accountId = cur.accountId }
   end
   picker.open(my_state.key, current_reporter, function(result, err)
-    if err or not result then return end
+    if err or not result then
+      return
+    end
     vim.schedule(function()
       refresh_preview_issue(my_state)
       refresh_board_in_background()
@@ -344,11 +429,15 @@ end
 -- Priority picker.
 local function trigger_priority()
   local my_state = _state
-  if not (my_state and my_state.key) then return end
+  if not (my_state and my_state.key) then
+    return
+  end
   local pr = my_state.issue and my_state.issue.fields and my_state.issue.fields.priority
   local cur = pr and pr.name or nil
   require("ledger.jira.board.ui.priority_picker").open(my_state.key, cur, function(ok)
-    if not ok then return end
+    if not ok then
+      return
+    end
     vim.schedule(function()
       refresh_preview_issue(my_state)
       refresh_board_in_background()
@@ -359,10 +448,14 @@ end
 -- Labels editor.
 local function trigger_labels()
   local my_state = _state
-  if not (my_state and my_state.key) then return end
+  if not (my_state and my_state.key) then
+    return
+  end
   local labels = (my_state.issue and my_state.issue.fields and my_state.issue.fields.labels) or {}
   require("ledger.jira.board.ui.labels_picker").open(my_state.key, labels, function(new)
-    if new == nil then return end
+    if new == nil then
+      return
+    end
     vim.schedule(function()
       refresh_preview_issue(my_state)
       refresh_board_in_background()
@@ -373,7 +466,9 @@ end
 -- Description editor (plain-text; wrapped into ADF when saving).
 local function trigger_description()
   local my_state = _state
-  if not (my_state and my_state.key) then return end
+  if not (my_state and my_state.key) then
+    return
+  end
   local issue = my_state.issue
   local initial = ""
   if issue and issue.fields and issue.fields.description then
@@ -382,7 +477,9 @@ local function trigger_description()
       initial = d
     elseif type(d) == "table" then
       local ok, lines = pcall(jira_adf.to_lines, d, 10000)
-      if ok and type(lines) == "table" then initial = table.concat(lines, "\n") end
+      if ok and type(lines) == "table" then
+        initial = table.concat(lines, "\n")
+      end
     end
   end
   require("ledger.jira.board.ui.text_editor").open({
@@ -390,7 +487,8 @@ local function trigger_description()
     initial = initial,
     on_save = function(text)
       local adf_body = {
-        type = "doc", version = 1,
+        type = "doc",
+        version = 1,
         content = {},
       }
       for line in (text .. "\n"):gmatch("([^\n]*)\n") do
@@ -423,14 +521,19 @@ end
 -- New comment editor.
 local function trigger_comment()
   local my_state = _state
-  if not (my_state and my_state.key) then return end
+  if not (my_state and my_state.key) then
+    return
+  end
   require("ledger.jira.board.ui.text_editor").open({
     title = "New comment — " .. my_state.key,
     initial = "",
     on_save = function(text)
-      if text == "" then return end
+      if text == "" then
+        return
+      end
       local adf_body = {
-        type = "doc", version = 1,
+        type = "doc",
+        version = 1,
         content = {},
       }
       for line in (text .. "\n"):gmatch("([^\n]*)\n") do
@@ -485,11 +588,17 @@ local function parse_description_sections(desc_lines)
     end
   end
   local function trim(t)
-    while #t > 0 and t[1] == "" do table.remove(t, 1) end
-    while #t > 0 and t[#t] == "" do table.remove(t) end
+    while #t > 0 and t[1] == "" do
+      table.remove(t, 1)
+    end
+    while #t > 0 and t[#t] == "" do
+      table.remove(t)
+    end
   end
   trim(intro)
-  for _, s in ipairs(sections) do trim(s.content) end
+  for _, s in ipairs(sections) do
+    trim(s.content)
+  end
 
   local out = { intro = intro, context = nil, cover = nil, extras = {} }
   for _, s in ipairs(sections) do
@@ -517,7 +626,9 @@ local function parse_md_table(lines)
       for cell in line:gmatch("|([^|]*)") do
         table.insert(cells, (cell:gsub("^%s+", ""):gsub("%s+$", "")))
       end
-      if #cells > 0 and cells[#cells] == "" then table.remove(cells) end
+      if #cells > 0 and cells[#cells] == "" then
+        table.remove(cells)
+      end
       if not in_table then
         header = cells
         rows = {}
@@ -525,9 +636,14 @@ local function parse_md_table(lines)
       else
         local is_sep = true
         for _, c in ipairs(cells) do
-          if not c:match("^[:%-]+$") then is_sep = false; break end
+          if not c:match("^[:%-]+$") then
+            is_sep = false
+            break
+          end
         end
-        if not is_sep then table.insert(rows, cells) end
+        if not is_sep then
+          table.insert(rows, cells)
+        end
       end
     elseif in_table and line == "" then
       -- allow blank lines inside a table block? break instead
@@ -536,14 +652,18 @@ local function parse_md_table(lines)
       break
     end
   end
-  if header and rows then return header, rows end
+  if header and rows then
+    return header, rows
+  end
   return nil, nil
 end
 
 -- Pad a row of segments so its total display width equals target_w.
 local function pad_segs_to(segs, target_w, fill_hl)
   local total = 0
-  for _, s in ipairs(segs) do total = total + dw(s[1]) end
+  for _, s in ipairs(segs) do
+    total = total + dw(s[1])
+  end
   local diff = target_w - total
   if diff > 0 then
     table.insert(segs, { string.rep(" ", diff), fill_hl or "JiraBoardNormal" })
@@ -553,13 +673,19 @@ end
 
 local function build_left_panel(w, issue)
   local lines = {}
-  local function row(segs) table.insert(lines, pad_segs_to(segs, w)) end
-  local function blank() row({ { string.rep(" ", w), "JiraBoardNormal" } }) end
-  local function hline() row({
-    { "  ", "JiraBoardNormal" },
-    { string.rep("─", w - 4), "JiraBoardColRule" },
-    { "  ", "JiraBoardNormal" },
-  }) end
+  local function row(segs)
+    table.insert(lines, pad_segs_to(segs, w))
+  end
+  local function blank()
+    row({ { string.rep(" ", w), "JiraBoardNormal" } })
+  end
+  local function hline()
+    row({
+      { "  ", "JiraBoardNormal" },
+      { string.rep("─", w - 4), "JiraBoardColRule" },
+      { "  ", "JiraBoardNormal" },
+    })
+  end
 
   local content_w = math.max(8, w - 4)
   local fields = (issue and issue.fields) or {}
@@ -592,7 +718,9 @@ local function build_left_panel(w, issue)
   -- Summary (bold)
   blank()
   local summary_lines = wrap_text(summary, content_w)
-  if #summary_lines == 0 then summary_lines = { "" } end
+  if #summary_lines == 0 then
+    summary_lines = { "" }
+  end
   for _, l in ipairs(summary_lines) do
     row({
       { "  ", "JiraBoardNormal" },
@@ -610,7 +738,9 @@ local function build_left_panel(w, issue)
   local desc_lines = {}
   if type(description) == "table" then
     local ok, res = pcall(jira_adf.to_lines, description, 200)
-    if ok and type(res) == "table" then desc_lines = res end
+    if ok and type(res) == "table" then
+      desc_lines = res
+    end
   elseif type(description) == "string" and description ~= "" then
     for line in (description .. "\n"):gmatch("([^\n]*)\n") do
       table.insert(desc_lines, line)
@@ -622,8 +752,7 @@ local function build_left_panel(w, issue)
   section(icons.LABEL.summary, "Description", M._trigger_description)
   if description == nil then
     body_line("(no description)", "JiraBoardMuted")
-  elseif #parsed.intro == 0 and #parsed.extras == 0
-      and not parsed.context and not parsed.cover then
+  elseif #parsed.intro == 0 and #parsed.extras == 0 and not parsed.context and not parsed.cover then
     body_line("(empty)", "JiraBoardMuted")
   else
     for _, raw in ipairs(parsed.intro) do
@@ -631,7 +760,9 @@ local function build_left_panel(w, issue)
     end
     -- Render non-Context / non-Tickets-to-cover sub-sections inline.
     for _, s in ipairs(parsed.extras) do
-      if #parsed.intro > 0 then blank() end
+      if #parsed.intro > 0 then
+        blank()
+      end
       body_line("" .. s.title, "JiraBoardTitle")
       for _, l in ipairs(s.content) do
         body_line(l or "", "JiraBoardCardSum")
@@ -666,8 +797,11 @@ local function build_left_panel(w, issue)
         local rel = "related to"
         local t = present(link.type)
         if t then
-          if outward then rel = present(t.outward) or rel
-          else rel = present(t.inward) or rel end
+          if outward then
+            rel = present(t.outward) or rel
+          else
+            rel = present(t.inward) or rel
+          end
         end
         if not groups[rel] then
           groups[rel] = {}
@@ -689,12 +823,16 @@ local function build_left_panel(w, issue)
         local st_hl = hl.status_hl(st or "")
         local suffix = st and ("  " .. icons.status(st) .. " " .. st) or ""
         local avail = content_w - dw("    ") - dw(k .. "  ") - dw(suffix)
-        if avail < 4 then avail = 4 end
+        if avail < 4 then
+          avail = 4
+        end
         local child_key = k
-        local link_actions = { click = function()
-          local open = require("ledger.jira.board.ui.preview").open
-          open({ key = child_key }, { stack = true })
-        end }
+        local link_actions = {
+          click = function()
+            local open = require("ledger.jira.board.ui.preview").open
+            open({ key = child_key }, { stack = true })
+          end,
+        }
         row({
           { "  ", "JiraBoardNormal" },
           { "    ", "JiraBoardNormal", link_actions },
@@ -721,12 +859,16 @@ local function build_left_panel(w, issue)
       local st_hl = hl.status_hl(st or "")
       local suffix = st and ("  " .. icons.status(st) .. " " .. st) or ""
       local avail = content_w - dw(k .. "  ") - dw(suffix)
-      if avail < 4 then avail = 4 end
+      if avail < 4 then
+        avail = 4
+      end
       local child_key = k
-      local link_actions = { click = function()
-        local open = require("ledger.jira.board.ui.preview").open
-        open({ key = child_key }, { stack = true })
-      end }
+      local link_actions = {
+        click = function()
+          local open = require("ledger.jira.board.ui.preview").open
+          open({ key = child_key }, { stack = true })
+        end,
+      }
       row({
         { "  ", "JiraBoardNormal" },
         { k .. "  ", "JiraBoardCardKey", link_actions },
@@ -755,7 +897,9 @@ local function build_left_panel(w, issue)
       local hdr_row = { { "  ", "JiraBoardNormal" } }
       for i, h in ipairs(md_header) do
         table.insert(hdr_row, { pad_right(truncate(h, col_w), col_w), "JiraBoardColHdr" })
-        if i < n then table.insert(hdr_row, { " ", "JiraBoardNormal" }) end
+        if i < n then
+          table.insert(hdr_row, { " ", "JiraBoardNormal" })
+        end
       end
       table.insert(hdr_row, { "  ", "JiraBoardNormal" })
       row(hdr_row)
@@ -770,16 +914,20 @@ local function build_left_panel(w, issue)
         local click = nil
         if ticket_key then
           local child_key = ticket_key
-          click = { click = function()
-            require("ledger.jira.board.ui.preview").open({ key = child_key }, { stack = true })
-          end }
+          click = {
+            click = function()
+              require("ledger.jira.board.ui.preview").open({ key = child_key }, { stack = true })
+            end,
+          }
         end
         local data_row = { { "  ", "JiraBoardNormal" } }
         for i = 1, n do
           local txt = pad_right(truncate(r_cells[i] or "", col_w), col_w)
           local hl_group = (i == 1 and ticket_key) and "JiraBoardTitle" or "JiraBoardNormal"
           table.insert(data_row, { txt, hl_group, click })
-          if i < n then table.insert(data_row, { " ", "JiraBoardNormal" }) end
+          if i < n then
+            table.insert(data_row, { " ", "JiraBoardNormal" })
+          end
         end
         table.insert(data_row, { "  ", "JiraBoardNormal" })
         row(data_row)
@@ -807,7 +955,9 @@ local function build_left_panel(w, issue)
     for _, c in ipairs(children) do
       local cat = c.fields and c.fields.status and c.fields.status.statusCategory
       local key_cat = (cat and (cat.key or (cat.name and cat.name:lower())))
-      if key_cat == "done" then done = done + 1 end
+      if key_cat == "done" then
+        done = done + 1
+      end
     end
     local pct = (count > 0) and math.floor((done / count) * 100) or 0
 
@@ -823,9 +973,13 @@ local function build_left_panel(w, issue)
       body_line("(none)", "JiraBoardMuted")
     else
       local bar_w = content_w - 10
-      if bar_w < 10 then bar_w = 10 end
+      if bar_w < 10 then
+        bar_w = 10
+      end
       local filled = math.floor((done / count) * bar_w + 0.5)
-      if filled > bar_w then filled = bar_w end
+      if filled > bar_w then
+        filled = bar_w
+      end
       row({
         { "  ", "JiraBoardNormal" },
         { string.rep("█", filled), "JiraBoardStDone" },
@@ -841,7 +995,9 @@ local function build_left_panel(w, issue)
       local priority_w = 9
       local assignee_w = 12
       local summary_w = content_w - key_w - status_w - priority_w - assignee_w - 4
-      if summary_w < 10 then summary_w = 10 end
+      if summary_w < 10 then
+        summary_w = 10
+      end
 
       -- Table header
       row({
@@ -859,8 +1015,7 @@ local function build_left_panel(w, issue)
       })
       row({
         { "  ", "JiraBoardNormal" },
-        { string.rep("─", key_w + summary_w + status_w + priority_w + assignee_w + 4),
-          "JiraBoardColRule" },
+        { string.rep("─", key_w + summary_w + status_w + priority_w + assignee_w + 4), "JiraBoardColRule" },
         { "  ", "JiraBoardNormal" },
       })
 
@@ -877,10 +1032,12 @@ local function build_left_panel(w, issue)
         local status_cell = st and (icons.status(st) .. " " .. st) or "—"
         local priority_cell = pr or "—"
         local child_key = k
-        local click = { click = function()
-          local open = require("ledger.jira.board.ui.preview").open
-          open({ key = child_key }, { stack = true })
-        end }
+        local click = {
+          click = function()
+            local open = require("ledger.jira.board.ui.preview").open
+            open({ key = child_key }, { stack = true })
+          end,
+        }
 
         row({
           { "  ", "JiraBoardNormal" },
@@ -911,9 +1068,13 @@ local function build_left_panel(w, issue)
     for i, c in ipairs(comments) do
       local author = (c.author and present(c.author.displayName)) or "someone"
       local created = present(c.created) or ""
-      if created ~= "" then created = created:sub(1, 10) end
+      if created ~= "" then
+        created = created:sub(1, 10)
+      end
       local header = author
-      if created ~= "" then header = header .. " · " .. created end
+      if created ~= "" then
+        header = header .. " · " .. created
+      end
       row({
         { "  ", "JiraBoardNormal" },
         { pad_right(truncate(header, content_w), content_w), "JiraBoardMuted" },
@@ -922,7 +1083,9 @@ local function build_left_panel(w, issue)
       local body_lines = {}
       if type(c.body) == "table" then
         local ok, res = pcall(jira_adf.to_lines, c.body, 30)
-        if ok and type(res) == "table" then body_lines = res end
+        if ok and type(res) == "table" then
+          body_lines = res
+        end
       elseif type(c.body) == "string" and c.body ~= "" then
         for line in (c.body .. "\n"):gmatch("([^\n]*)\n") do
           table.insert(body_lines, line)
@@ -948,7 +1111,9 @@ local function build_left_panel(w, issue)
           { "  ", "JiraBoardNormal" },
         })
       end
-      if i < #comments then blank() end
+      if i < #comments then
+        blank()
+      end
     end
   end
   blank()
@@ -958,13 +1123,19 @@ end
 
 local function build_right_panel(w, issue)
   local lines = {}
-  local function row(segs) table.insert(lines, pad_segs_to(segs, w, "JiraBoardNormal")) end
-  local function blank() row({ { string.rep(" ", w), "JiraBoardNormal" } }) end
-  local function hline() row({
-    { "  ", "JiraBoardNormal" },
-    { string.rep("─", w - 4), "JiraBoardColRule" },
-    { "  ", "JiraBoardNormal" },
-  }) end
+  local function row(segs)
+    table.insert(lines, pad_segs_to(segs, w, "JiraBoardNormal"))
+  end
+  local function blank()
+    row({ { string.rep(" ", w), "JiraBoardNormal" } })
+  end
+  local function hline()
+    row({
+      { "  ", "JiraBoardNormal" },
+      { string.rep("─", w - 4), "JiraBoardColRule" },
+      { "  ", "JiraBoardNormal" },
+    })
+  end
 
   local content_w = math.max(8, w - 4)
   local fields = (issue and issue.fields) or {}
@@ -983,7 +1154,9 @@ local function build_right_panel(w, issue)
   -- Inline detail: a single row per field with `Label   Value`. Continuation
   -- lines (for long wrapped values) align under the value column.
   local label_w = 18
-  if label_w > content_w - 10 then label_w = math.max(10, content_w - 10) end
+  if label_w > content_w - 10 then
+    label_w = math.max(10, content_w - 10)
+  end
   local value_w = content_w - label_w - 1
 
   local function detail(icon, label, value, opts)
@@ -995,7 +1168,9 @@ local function build_right_panel(w, issue)
     local empty_hl = (value == nil or value == "") and "JiraBoardMuted" or nil
     local label_seg = (icon or "") .. " " .. label
     local value_lines = wrap_text(display, value_w)
-    if #value_lines == 0 then value_lines = { display } end
+    if #value_lines == 0 then
+      value_lines = { display }
+    end
     -- First line: label (muted) + first value chunk.
     row({
       { "  ", "JiraBoardNormal" },
@@ -1019,30 +1194,41 @@ local function build_right_panel(w, issue)
   end
 
   local function opt_value(v)
-    if type(v) ~= "table" then return present(v) end
+    if type(v) ~= "table" then
+      return present(v)
+    end
     return present(v.value) or present(v.name) or present(v.displayName)
   end
 
   local function join_option_list(arr)
-    if type(arr) ~= "table" then return nil end
+    if type(arr) ~= "table" then
+      return nil
+    end
     local names = {}
     for _, p in ipairs(arr) do
       local name = opt_value(p)
-      if name then table.insert(names, name) end
+      if name then
+        table.insert(names, name)
+      end
     end
-    if #names == 0 then return nil end
+    if #names == 0 then
+      return nil
+    end
     return table.concat(names, ", ")
   end
 
-  local st = present(fields.status); st = st and present(st.name)
-  local pr = present(fields.priority); pr = pr and present(pr.name)
+  local st = present(fields.status)
+  st = st and present(st.name)
+  local pr = present(fields.priority)
+  pr = pr and present(pr.name)
   local a = present(fields.assignee)
   local assignee = a and (present(a.displayName) or present(a.emailAddress)) or nil
   local r = present(fields.reporter)
   local reporter = r and (present(r.displayName) or present(r.emailAddress)) or nil
   local c = present(fields.creator)
   local creator = c and (present(c.displayName) or present(c.emailAddress)) or nil
-  local it = present(fields.issuetype); it = it and present(it.name)
+  local it = present(fields.issuetype)
+  it = it and present(it.name)
 
   detail(icons.status(st or ""), "Status", st, {
     value_hl = hl.status_hl(st or ""),
@@ -1072,10 +1258,14 @@ local function build_right_panel(w, issue)
     for _, s in ipairs(sprints) do
       if type(s) == "table" then
         local n = present(s.name)
-        if n then table.insert(names, n) end
+        if n then
+          table.insert(names, n)
+        end
       end
     end
-    if #names > 0 then sprint_txt = table.concat(names, ", ") end
+    if #names > 0 then
+      sprint_txt = table.concat(names, ", ")
+    end
   end
   detail(L.updated, "Sprint", sprint_txt)
 
@@ -1096,7 +1286,9 @@ local function build_right_panel(w, issue)
 
   local function date10(v)
     local s = present(v)
-    if not s then return nil end
+    if not s then
+      return nil
+    end
     return tostring(s):sub(1, 10)
   end
 
@@ -1109,16 +1301,26 @@ end
 -- Build the body lines given current state.
 local function build_lines(inner_w)
   local lines = {}
-  local function row_raw(segs) table.insert(lines, segs) end
-  local function blank() row_raw({ { string.rep(" ", inner_w), "JiraBoardNormal" } }) end
+  local function row_raw(segs)
+    table.insert(lines, segs)
+  end
+  local function blank()
+    row_raw({ { string.rep(" ", inner_w), "JiraBoardNormal" } })
+  end
 
   -- Header: key on left, close cross on right.
   local key = _state.key or "?"
   local key_txt = " " .. key .. " "
   local close_txt = " ✕ "
-  local close_actions = { click = function() close() end }
+  local close_actions = {
+    click = function()
+      close()
+    end,
+  }
   local mid = inner_w - dw(key_txt) - dw(close_txt)
-  if mid < 1 then mid = 1 end
+  if mid < 1 then
+    mid = 1
+  end
   row_raw({
     { key_txt, "JiraBoardTitle" },
     { string.rep(" ", mid), "JiraBoardNormal" },
@@ -1151,7 +1353,9 @@ local function build_lines(inner_w)
   -- Two-panel layout: left (summary + description), right (details).
   local divider_w = 3 -- " │ "
   local left_w = math.floor(inner_w * 0.60)
-  if left_w < 30 then left_w = math.min(30, inner_w - divider_w - 20) end
+  if left_w < 30 then
+    left_w = math.min(30, inner_w - divider_w - 20)
+  end
   local right_w = inner_w - left_w - divider_w
   if right_w < 20 then
     right_w = 20
@@ -1174,9 +1378,13 @@ local function build_lines(inner_w)
       right = pad_segs_to({}, right_w, "JiraBoardNormal")
     end
     local merged = {}
-    for _, s in ipairs(left) do table.insert(merged, s) end
+    for _, s in ipairs(left) do
+      table.insert(merged, s)
+    end
     table.insert(merged, { " │ ", "JiraBoardColRule" })
-    for _, s in ipairs(right) do table.insert(merged, s) end
+    for _, s in ipairs(right) do
+      table.insert(merged, s)
+    end
     row_raw(merged)
   end
 
@@ -1185,7 +1393,9 @@ end
 
 rerender = function()
   local s = _state
-  if not (s.buf and api.nvim_buf_is_valid(s.buf)) then return end
+  if not (s.buf and api.nvim_buf_is_valid(s.buf)) then
+    return
+  end
   local screen_w = vim.o.columns
   local screen_h = vim.o.lines
   local w = math.min(120, screen_w - 6)
@@ -1195,7 +1405,12 @@ rerender = function()
 
   api.nvim_set_option_value("modifiable", true, { buf = s.buf })
   volt.set_empty_lines(s.buf, #lines, inner_w)
-  s.layout = { { name = "body", lines = function() return lines end } }
+  s.layout = { {
+    name = "body",
+    lines = function()
+      return lines
+    end,
+  } }
   volt.gen_data({ { buf = s.buf, xpad = 0, layout = s.layout, ns = s.ns } })
   volt.redraw(s.buf, "all")
   api.nvim_set_option_value("modifiable", false, { buf = s.buf })
@@ -1205,8 +1420,11 @@ rerender = function()
     local row = math.floor((screen_h - h) / 2) - 1
     local col = math.floor((screen_w - w) / 2)
     pcall(api.nvim_win_set_config, s.win, {
-      relative = "editor", row = row, col = col,
-      width = w, height = h,
+      relative = "editor",
+      row = row,
+      col = col,
+      width = w,
+      height = h,
     })
   end
 
@@ -1218,7 +1436,10 @@ rerender = function()
     if #rows > 0 then
       local kept
       for _, r in ipairs(rows) do
-        if r.row == s.focus_row and r.side == s.focus_side then kept = r; break end
+        if r.row == s.focus_row and r.side == s.focus_side then
+          kept = r
+          break
+        end
       end
       if kept then
         set_focus(s.buf, kept)
@@ -1232,7 +1453,9 @@ end
 function M.open(issue, opts)
   opts = opts or {}
   local key = issue and issue.key or nil
-  if not key then return end
+  if not key then
+    return
+  end
 
   -- Stack semantics: if a preview is already open and the caller passes
   -- opts.stack, push the current one so the new preview layers on top.
@@ -1246,7 +1469,9 @@ function M.open(issue, opts)
   end
 
   -- Freeze the board's scroll while any preview is visible.
-  pcall(function() require("ledger.jira.board.ui.window").lock_scroll() end)
+  pcall(function()
+    require("ledger.jira.board.ui.window").lock_scroll()
+  end)
 
   local depth = #_stack -- 0 for the root preview, 1+ for stacked drill-ins
   local zindex = 160 + 10 * depth
@@ -1260,9 +1485,13 @@ function M.open(issue, opts)
 
   local buf = api.nvim_create_buf(false, true)
   local win = api.nvim_open_win(buf, true, {
-    relative = "editor", row = row, col = col,
-    width = w, height = h,
-    style = "minimal", border = "single",
+    relative = "editor",
+    row = row,
+    col = col,
+    width = w,
+    height = h,
+    style = "minimal",
+    border = "single",
     zindex = zindex,
   })
   jira_util.clean_float_window(win)
@@ -1273,7 +1502,7 @@ function M.open(issue, opts)
   hl.define(ns)
   api.nvim_win_set_hl_ns(win, ns)
   api.nvim_set_hl(ns, "FloatBorder", { link = "JiraBoardBorder" })
-  api.nvim_set_hl(ns, "Normal",      { link = "JiraBoardNormal" })
+  api.nvim_set_hl(ns, "Normal", { link = "JiraBoardNormal" })
 
   _state.buf = buf
   _state.win = win
@@ -1286,7 +1515,12 @@ function M.open(issue, opts)
 
   -- gen_data must run before volt.run (which internally calls redraw).
   local initial_lines = build_lines(w)
-  _state.layout = { { name = "body", lines = function() return initial_lines end } }
+  _state.layout = { {
+    name = "body",
+    lines = function()
+      return initial_lines
+    end,
+  } }
   volt.gen_data({ { buf = buf, xpad = 0, layout = _state.layout, ns = ns } })
   local total_h = require("volt.state")[buf].h
   volt.run(buf, { h = total_h, w = w })
@@ -1297,8 +1531,11 @@ function M.open(issue, opts)
     local new_row = math.floor((sh - new_h) / 2) - 1 + 2 * depth
     local new_col = math.floor((sw - w) / 2) + 4 * depth
     pcall(api.nvim_win_set_config, win, {
-      relative = "editor", row = new_row, col = new_col,
-      width = w, height = new_h,
+      relative = "editor",
+      row = new_row,
+      col = new_col,
+      width = w,
+      height = new_h,
     })
   end
 
@@ -1326,9 +1563,12 @@ function M.open(issue, opts)
   local function kmap(lhs, fn)
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true })
   end
-  kmap("q", close); kmap("<Esc>", close); kmap("p", close)
+  kmap("q", close)
+  kmap("<Esc>", close)
+  kmap("p", close)
   kmap("y", function()
-    vim.fn.setreg("+", key); vim.fn.setreg('"', key)
+    vim.fn.setreg("+", key)
+    vim.fn.setreg('"', key)
     vim.notify("jira-board: yanked " .. key)
   end)
   kmap("<CR>", function()
@@ -1344,46 +1584,90 @@ function M.open(issue, opts)
           if item.col_start <= colnum and item.col_end >= colnum then
             local actions = item.actions
             local fn = type(actions) == "table" and actions.click or actions
-            if type(fn) == "function" then fn(); return end
-            if type(fn) == "string" then vim.cmd(fn); return end
+            if type(fn) == "function" then
+              fn()
+              return
+            end
+            if type(fn) == "string" then
+              vim.cmd(fn)
+              return
+            end
           end
         end
       end
     end
   end)
-  kmap("b", function() jira_util.open_url(jira_util.ticket_url(key)) end)
+  kmap("b", function()
+    jira_util.open_url(jira_util.ticket_url(key))
+  end)
   -- In-preview actions (pickers open on top, preview stays visible).
-  kmap("m", function() M._trigger_assign_me() end)
-  kmap("a", function() M._trigger_assign_other() end)
-  kmap("t", function() M._trigger_transition() end)
-  kmap("?", function() require("ledger.jira.board.ui.preview_help").toggle() end)
+  kmap("m", function()
+    M._trigger_assign_me()
+  end)
+  kmap("a", function()
+    M._trigger_assign_other()
+  end)
+  kmap("t", function()
+    M._trigger_transition()
+  end)
+  kmap("?", function()
+    require("ledger.jira.board.ui.preview_help").toggle()
+  end)
   -- Focus navigation: Tab toggles between left/right sections; j/k/arrows
   -- cycle the editable fields within the currently-focused side.
-  kmap("<Tab>",   function() focus_nav(buf, "toggle_side") end)
-  kmap("<S-Tab>", function() focus_nav(buf, "toggle_side") end)
-  kmap("j",       function() focus_nav(buf, "down") end)
-  kmap("k",       function() focus_nav(buf, "up") end)
-  kmap("l",       function() focus_nav(buf, "down") end)
-  kmap("h",       function() focus_nav(buf, "up") end)
-  kmap("<Down>",  function() focus_nav(buf, "down") end)
-  kmap("<Up>",    function() focus_nav(buf, "up") end)
-  kmap("<Right>", function() focus_nav(buf, "down") end)
-  kmap("<Left>",  function() focus_nav(buf, "up") end)
+  kmap("<Tab>", function()
+    focus_nav(buf, "toggle_side")
+  end)
+  kmap("<S-Tab>", function()
+    focus_nav(buf, "toggle_side")
+  end)
+  kmap("j", function()
+    focus_nav(buf, "down")
+  end)
+  kmap("k", function()
+    focus_nav(buf, "up")
+  end)
+  kmap("l", function()
+    focus_nav(buf, "down")
+  end)
+  kmap("h", function()
+    focus_nav(buf, "up")
+  end)
+  kmap("<Down>", function()
+    focus_nav(buf, "down")
+  end)
+  kmap("<Up>", function()
+    focus_nav(buf, "up")
+  end)
+  kmap("<Right>", function()
+    focus_nav(buf, "down")
+  end)
+  kmap("<Left>", function()
+    focus_nav(buf, "up")
+  end)
 
   -- Fetch full issue, then fetch full details for its children so the
   -- tickets-to-cover table has assignee / priority / status populated.
   jira_api.get_issue(key, function(data, err)
     vim.schedule(function()
-      if not (my_state.buf and api.nvim_buf_is_valid(my_state.buf)) then return end
+      if not (my_state.buf and api.nvim_buf_is_valid(my_state.buf)) then
+        return
+      end
       my_state.loading = false
       if err then
         my_state.error = tostring(err)
-        if my_state == _state then rerender() end
+        if my_state == _state then
+          rerender()
+        end
         return
       end
-      if not data then return end
+      if not data then
+        return
+      end
       my_state.issue = data
-      if my_state == _state then rerender() end
+      if my_state == _state then
+        rerender()
+      end
 
       local it = data.fields and data.fields.issuetype
       local is_epic = it and (it.name == "Epic" or (it.hierarchyLevel or 0) >= 1)
@@ -1393,17 +1677,20 @@ function M.open(issue, opts)
       }
       local function on_children(sdata, serr)
         vim.schedule(function()
-          if serr or not sdata then return end
-          if not (my_state.buf and api.nvim_buf_is_valid(my_state.buf)) then return end
+          if serr or not sdata then
+            return
+          end
+          if not (my_state.buf and api.nvim_buf_is_valid(my_state.buf)) then
+            return
+          end
           my_state.children = sdata.issues or {}
-          if my_state == _state and rerender then pcall(rerender) end
+          if my_state == _state and rerender then
+            pcall(rerender)
+          end
         end)
       end
       if is_epic then
-        jira_api.search_issues(
-          'parent = "' .. key .. '" ORDER BY status, key',
-          on_children, fetch_opts
-        )
+        jira_api.search_issues('parent = "' .. key .. '" ORDER BY status, key', on_children, fetch_opts)
       else
         local keys = {}
         local seen = {}
@@ -1421,18 +1708,19 @@ function M.open(issue, opts)
         end
         if #keys == 0 then
           my_state.children = {}
-          if my_state == _state and rerender then pcall(rerender) end
+          if my_state == _state and rerender then
+            pcall(rerender)
+          end
         else
-          jira_api.search_issues(
-            "issueKey in (" .. table.concat(keys, ",") .. ")",
-            on_children, fetch_opts
-          )
+          jira_api.search_issues("issueKey in (" .. table.concat(keys, ",") .. ")", on_children, fetch_opts)
         end
       end
     end)
   end)
 end
 
-function M.close() close() end
+function M.close()
+  close()
+end
 
 return M

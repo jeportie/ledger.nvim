@@ -12,9 +12,13 @@ end
 
 local function render_focus(session)
   clear_highlight(session)
-  if session.focus_idx < 1 then return end
+  if session.focus_idx < 1 then
+    return
+  end
   local r = session.regions[session.focus_idx]
-  if not r then return end
+  if not r then
+    return
+  end
   pcall(vim.api.nvim_buf_set_extmark, session.buf, session.ns, r.line, r.col_start, {
     end_col = r.col_end,
     hl_group = "XrayEditFocus",
@@ -26,21 +30,31 @@ local function render_focus(session)
 end
 
 local function move(session, delta)
-  if #session.regions == 0 then return end
+  if #session.regions == 0 then
+    return
+  end
   if session.focus_idx == 0 then
     session.focus_idx = delta > 0 and 1 or #session.regions
   else
     session.focus_idx = session.focus_idx + delta
-    if session.focus_idx < 1 then session.focus_idx = #session.regions end
-    if session.focus_idx > #session.regions then session.focus_idx = 1 end
+    if session.focus_idx < 1 then
+      session.focus_idx = #session.regions
+    end
+    if session.focus_idx > #session.regions then
+      session.focus_idx = 1
+    end
   end
   render_focus(session)
 end
 
 local function activate(session)
-  if session.focus_idx < 1 then return end
+  if session.focus_idx < 1 then
+    return
+  end
   local r = session.regions[session.focus_idx]
-  if not r then return end
+  if not r then
+    return
+  end
   if session.on_activate then
     session.on_activate(r, session)
   else
@@ -62,7 +76,9 @@ end
 
 function M.attach(buf, win, regions, opts)
   opts = opts or {}
-  if not buf or not vim.api.nvim_buf_is_valid(buf) then return nil end
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return nil
+  end
   regions = regions or {}
 
   local session = {
@@ -79,16 +95,28 @@ function M.attach(buf, win, regions, opts)
 
   local km = { buffer = buf, nowait = true, silent = true }
 
-  vim.keymap.set("n", "<Tab>", function() move(session, 1) end, km)
-  vim.keymap.set("n", "<S-Tab>", function() move(session, -1) end, km)
-  vim.keymap.set("n", "<Right>", function() move(session, 1) end, km)
-  vim.keymap.set("n", "<Left>", function() move(session, -1) end, km)
+  vim.keymap.set("n", "<Tab>", function()
+    move(session, 1)
+  end, km)
+  vim.keymap.set("n", "<S-Tab>", function()
+    move(session, -1)
+  end, km)
+  vim.keymap.set("n", "<Right>", function()
+    move(session, 1)
+  end, km)
+  vim.keymap.set("n", "<Left>", function()
+    move(session, -1)
+  end, km)
 
-  vim.keymap.set("n", "<CR>", function() activate(session) end, km)
+  vim.keymap.set("n", "<CR>", function()
+    activate(session)
+  end, km)
   vim.keymap.set("n", "<LeftMouse>", function()
     local pos = vim.fn.getmousepos()
     if not pos or pos.winid ~= session.win then
-      if opts.fallback_click then opts.fallback_click() end
+      if opts.fallback_click then
+        opts.fallback_click()
+      end
       return
     end
     local handled = click_at(session, (pos.line or 1) - 1, (pos.column or 1) - 1)
@@ -102,7 +130,9 @@ end
 
 function M.update(buf, regions)
   local s = _sessions[buf]
-  if not s then return end
+  if not s then
+    return
+  end
   s.regions = regions or {}
   s.focus_idx = 0
   clear_highlight(s)
@@ -110,14 +140,18 @@ end
 
 function M.detach(buf)
   local s = _sessions[buf]
-  if not s then return end
+  if not s then
+    return
+  end
   clear_highlight(s)
   _sessions[buf] = nil
 end
 
 function M.focused(buf)
   local s = _sessions[buf]
-  if not s or s.focus_idx < 1 then return nil end
+  if not s or s.focus_idx < 1 then
+    return nil
+  end
   return s.regions[s.focus_idx]
 end
 

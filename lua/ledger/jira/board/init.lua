@@ -23,7 +23,9 @@ local function columns_from_config(data)
   for _, col in ipairs(board_cols) do
     local ids = {}
     for _, s in ipairs(col.statuses or {}) do
-      if s.id then table.insert(ids, tostring(s.id)) end
+      if s.id then
+        table.insert(ids, tostring(s.id))
+      end
     end
     table.insert(cols, { name = col.name, status_ids = ids })
   end
@@ -32,7 +34,10 @@ end
 
 local function resolve_board_id(cb)
   local c = config.get()
-  if c.board_id then cb(c.board_id, c.board_name or ("board " .. c.board_id)); return end
+  if c.board_id then
+    cb(c.board_id, c.board_name or ("board " .. c.board_id))
+    return
+  end
 
   local function pick_from(values, label)
     if not values or #values == 0 then
@@ -41,7 +46,10 @@ local function resolve_board_id(cb)
     end
     if c.board_name then
       for _, b in ipairs(values) do
-        if b.name == c.board_name then cb(b.id, b.name); return end
+        if b.name == c.board_name then
+          cb(b.id, b.name)
+          return
+        end
       end
     end
     cb(values[1].id, values[1].name)
@@ -49,12 +57,18 @@ local function resolve_board_id(cb)
 
   if c.board_name then
     agile.find_boards({ name = c.board_name, project = c.project_key }, function(data, err)
-      if err then cb(nil, nil, err); return end
+      if err then
+        cb(nil, nil, err)
+        return
+      end
       pick_from((data or {}).values, c.board_name)
     end)
   else
     agile.find_boards({ project = c.project_key }, function(data, err)
-      if err then cb(nil, nil, err); return end
+      if err then
+        cb(nil, nil, err)
+        return
+      end
       pick_from((data or {}).values, c.project_key)
     end)
   end
@@ -62,9 +76,15 @@ end
 
 local function load_columns(board_id, cb)
   agile.get_board_config(board_id, function(data, err)
-    if err then cb(err); return end
+    if err then
+      cb(err)
+      return
+    end
     local cols = columns_from_config(data)
-    if #cols == 0 then cb("board has no columns"); return end
+    if #cols == 0 then
+      cb("board has no columns")
+      return
+    end
     store.set_columns(cols)
     cb(nil)
   end)
@@ -75,14 +95,19 @@ local function load_issues(board_id, cb)
     fields = "summary,status,priority,assignee,issuetype,labels,updated,parent",
     page_cap = config.get().page_cap,
   }, function(issues, err)
-    if err then cb(err); return end
+    if err then
+      cb(err)
+      return
+    end
     store.set_issues(issues or {})
     cb(nil)
   end)
 end
 
 local function ensure_me(cb)
-  if store.state.me and store.state.me.accountId then return cb() end
+  if store.state.me and store.state.me.accountId then
+    return cb()
+  end
   jira_api.get_myself(function(me, err)
     if not err and me and me.accountId then
       local urls = me.avatarUrls or {}
@@ -102,9 +127,15 @@ function M.open()
     end
     store.set_board(id, name)
     load_columns(id, function(cerr)
-      if cerr then notify(tostring(cerr), vim.log.levels.ERROR); return end
+      if cerr then
+        notify(tostring(cerr), vim.log.levels.ERROR)
+        return
+      end
       load_issues(id, function(ierr)
-        if ierr then notify(tostring(ierr), vim.log.levels.ERROR); return end
+        if ierr then
+          notify(tostring(ierr), vim.log.levels.ERROR)
+          return
+        end
         ensure_me(function()
           vim.schedule(function()
             require("ledger.jira.board.ui.window").open()
