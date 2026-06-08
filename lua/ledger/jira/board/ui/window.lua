@@ -638,17 +638,9 @@ function M.open()
     })
   end
 
-  local volt_shim = require("scrolldbg.volt_shim")
-  volt_shim.preload()
-  require("volt.events").add(buf)
-  volt_shim.safe_enable()
-
-  api.nvim_create_autocmd("BufWipeout", {
-    buffer = buf,
-    callback = function()
-      volt_shim.cleanup_buf(buf)
-    end,
-  })
+  local volt_events = require("volt.events")
+  volt_events.add(buf)
+  volt_events.enable()
 
   set_keymaps(buf)
 
