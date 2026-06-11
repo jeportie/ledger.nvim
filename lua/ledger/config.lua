@@ -48,6 +48,12 @@ function M.setup(opts)
       })
     end
   end
+
+  -- Builder backend: :LedgerTask / :LedgerTasks
+  local ok_tasks, tasks = pcall(require, "ledger.tasks")
+  if ok_tasks and tasks.register_commands then
+    tasks.register_commands()
+  end
 end
 
 function M.get()
