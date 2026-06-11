@@ -54,6 +54,12 @@ function M.setup(opts)
   if ok_tasks and tasks.register_commands then
     tasks.register_commands()
   end
+
+  -- Builder dashboard: :LedgerBuilder
+  local ok_builder, builder = pcall(require, "ledger.builder")
+  if ok_builder and builder.register_commands then
+    builder.register_commands()
+  end
 end
 
 function M.get()
