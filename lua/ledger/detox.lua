@@ -84,6 +84,14 @@ function M.get_e2e_mobile_root()
   return M.get_e2e_subdir("mobile")
 end
 
+-- True if `root` looks like the ledger-live monorepo (has one of the apps).
+function M.is_ledger_root(root)
+  if not root or root == "" then
+    return false
+  end
+  return uv.fs_stat(root .. "/apps/ledger-live-desktop") ~= nil or uv.fs_stat(root .. "/apps/ledger-live-mobile") ~= nil
+end
+
 function M.get_repo_root()
   local cwd = uv.cwd()
   if uv.fs_stat(cwd .. "/e2e/mobile") then

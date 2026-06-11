@@ -40,10 +40,15 @@ end
 
 local function run_terminal(spec)
   local shell = M._shell_string(spec)
-  -- Daemons get a persistent split; one-shots a transient one.
+  -- A fresh scratch buffer in a new split: `jobstart(term=true)` requires the
+  -- target buffer to be empty/unmodified, so we must not reuse the buffer the
+  -- split inherits from the current window.
+  local buf = vim.api.nvim_create_buf(false, true)
   vim.cmd("botright " .. (spec.daemon and "10" or "15") .. "split")
-  local buf = vim.api.nvim_get_current_buf()
-  local job = vim.fn.termopen(shell, {
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win, buf)
+  local job = vim.fn.jobstart(shell, {
+    term = true,
     on_exit = function(_, code)
       vim.schedule(function()
         local lvl = code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR
@@ -55,9 +60,37 @@ local function run_terminal(spec)
   return job, buf
 end
 
+-- Resolve the monorepo root: configured `monorepo_root` wins, else detect from
+-- cwd. Returns nil if neither points at a ledger-live checkout.
+function M.resolve_root()
+  local detox = require("ledger.detox")
+  local cfg = require("ledger.config").get()
+  local configured = cfg.monorepo_root
+  if configured and configured ~= "" then
+    local root = vim.fn.expand(configured)
+    if detox.is_ledger_root(root) then
+      return root
+    end
+  end
+  local detected = detox.get_repo_root()
+  if detox.is_ledger_root(detected) then
+    return detected
+  end
+  return nil
+end
+
 -- Run a template by id with opts. Returns true on launch.
 function M.run(id, opts)
-  local spec, err = templates.resolve(id, opts)
+  local root = M.resolve_root()
+  if not root then
+    vim.notify(
+      "ledger.tasks: not inside a ledger-live repo.\n"
+        .. "cd into the monorepo, or set `monorepo_root` in require('ledger').setup{}.",
+      vim.log.levels.WARN
+    )
+    return false, "not a ledger-live repo"
+  end
+  local spec, err = templates.resolve(id, opts, root)
   if not spec then
     vim.notify("ledger.tasks: " .. tostring(err), vim.log.levels.ERROR)
     return false, err

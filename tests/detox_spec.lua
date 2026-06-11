@@ -1,0 +1,26 @@
+local detox = require("ledger.detox")
+
+describe("ledger.detox.is_ledger_root", function()
+  it("detects a checkout by its desktop app", function()
+    local tmp = vim.fn.tempname()
+    vim.fn.mkdir(tmp .. "/apps/ledger-live-desktop", "p")
+    assert.is_true(detox.is_ledger_root(tmp))
+  end)
+
+  it("detects a checkout by its mobile app", function()
+    local tmp = vim.fn.tempname()
+    vim.fn.mkdir(tmp .. "/apps/ledger-live-mobile", "p")
+    assert.is_true(detox.is_ledger_root(tmp))
+  end)
+
+  it("rejects an unrelated directory", function()
+    local tmp = vim.fn.tempname()
+    vim.fn.mkdir(tmp, "p")
+    assert.is_false(detox.is_ledger_root(tmp))
+  end)
+
+  it("rejects nil / empty", function()
+    assert.is_false(detox.is_ledger_root(nil))
+    assert.is_false(detox.is_ledger_root(""))
+  end)
+end)
