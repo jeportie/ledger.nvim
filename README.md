@@ -7,7 +7,7 @@ monorepo: Jira/Xray ticket management, Playwright + Detox test orchestration,
 build/process supervision, GitHub PR + Actions boards, Allure result browsing,
 and the multi-terminal choreography that QA Automation work on Ledger Live requires.
 
-> Status: pre-alpha. Tracking 28 issues across 4 phases. See
+> Status: pre-alpha. Tracking 29 open issues across 4 phases. See
 > [Roadmap](#roadmap) below or the
 > [issues list](https://github.com/jeportie/ledger.nvim/issues) for current state.
 
@@ -214,14 +214,30 @@ Runs the current spec 3 times sequentially, aggregates results in a report buffe
 
 All boards share a single rendering engine (`lua/ledger/ui/board.lua`, extracted in [#14](https://github.com/jeportie/ledger.nvim/issues/14)) and use `nvzone/volt` for cell-based painting + `nvzone/menu` for context menus. They follow the visual conventions established by the existing Jira board.
 
-#### Builder board — `<leader>Lb` 📋 [#7](https://github.com/jeportie/ledger.nvim/issues/7)
+#### Builder dashboard — `<leader>Lb` 📋 [#7](https://github.com/jeportie/ledger.nvim/issues/7)
 
-Long-running infrastructure cards: Metro · Speculos containers · Detox build · Playwright run · library `--watch` · `dev:lld` · `dev:llm` · `pnpm install` · `pod install` · `gradle assemble`. Backed by `overseer.nvim` task templates ([#5](https://github.com/jeportie/ledger.nvim/issues/5)).
+The flagship board: a single volt dashboard that drives the **whole desktop + mobile E2E flow** — build → monitor → launch → test — with live process tracking, log tail, history, and stats. Modelled on the `typr` stats dashboard. It's the umbrella over the overseer backend ([#5](https://github.com/jeportie/ledger.nvim/issues/5)), the folded-in process monitor (was [#20](https://github.com/jeportie/ledger.nvim/issues/20)), the build-target picker ([#9](https://github.com/jeportie/ledger.nvim/issues/9)), env profiles ([#4](https://github.com/jeportie/ledger.nvim/issues/4)) and artifact viewers ([#10](https://github.com/jeportie/ledger.nvim/issues/10)).
 
-**Columns:** `Queued / Running / Failed / Done`
-**Card actions:** `<CR>` view live log · `r` restart · `x` kill · `y` yank command · `t` change target (debug/release/prerelease) · `p` change platform · `R` refresh
+**Layout** — platform toggle (`D`/`M` switches Desktop ↔ Mobile context; processes/logs/history shared):
 
-Solves the "9-terminal QA flow" documented in the onboarding guide (Metro + Speculos + Detox bridge + emulator + adb reverse + ...) by giving you a single dashboard view.
+```
+┌─ Ledger Builder ──────────  env: mobile-debug-ios ▼  MOCK=1  nanoSP  <C-t> panes  ? ─┐
+  ● Desktop   ○ Mobile        repo: ledger-live @ develop ✓ clean    last green: 2h ago
+  ┌ PIPELINE ──────────────────────┐  ┌ PROCESSES ─────────────────────────┐
+   ✓ 1 deps installed       12s     │   ⠋ Metro        :8081  up 4m [x][↻][l]
+   ✓ 2 libs + cli built     1m04    │   ● Speculos     :5001  2 ctr [x]  [l]
+   ✓ 3 testing build  fresh 1m58    │   ○ Detox bridge :8099  down
+   ⠙ 4 simulator booting…           │   ● iOS sim      booted iPhone15
+   ○ 5 metro                        │  ┌ LOGS · Metro ──────────────────────┐
+   ○ 6 detox test                   │   12:03 ✓ bundle 1823 modules
+   [B]uild [R]un [A]ll [S]top       │   12:04   reloading app…
+  └─────────────────────────────────┘  └─────────────────────────────────────┘
+  ┌ HISTORY (last 8) ──────┐  ┌ BUILD TIME ─┐  ┌ PASS RATE ─┐
+   12:01 ios.debug 1m58 ✓  │   ▆▃▅▂▇▃▅       │   ███░ 86%
+  └────────────────────────┘  └─────────────┘  └────────────┘
+```
+
+The **Pipeline pane is the E2E state machine**: each step knows its precondition and shows `✓ done · ⠙ running · ○ pending · ~ stale · ✗ failed` with last duration. Steps skip when already satisfied (mtime staleness gate in v1; nx-affected in v2, [#34](https://github.com/jeportie/ledger.nvim/issues/34)). `[A]ll` walks build → monitor → launch → **neotest test run** end to end. The **Processes pane** (folded-in monitor) shows live daemon cards with kill/restart/log actions, timer-polled. Animations are timer-driven `volt.redraw` spinners in v1; mini.animate polish in v2 ([#35](https://github.com/jeportie/ledger.nvim/issues/35)). Full design + pane spec + state machine live in issue [#7](https://github.com/jeportie/ledger.nvim/issues/7).
 
 #### PR board — `<leader>Lp` 📋 [#16](https://github.com/jeportie/ledger.nvim/issues/16)
 
@@ -272,9 +288,9 @@ A floating picker pre-populated with the canonical build matrix:
 
 Picked target persists per-workspace and integrates with the Builder board task templates.
 
-#### Process monitor — `:LedgerMonitor` 📋 [#20](https://github.com/jeportie/ledger.nvim/issues/20)
+#### Process monitor — folded into the Builder dashboard ([#20](https://github.com/jeportie/ledger.nvim/issues/20) → [#7](https://github.com/jeportie/ledger.nvim/issues/7))
 
-Small floating window (or statusline section) showing live status of Metro (port 8081), Detox bridge (port 8099), Speculos containers (`docker ps`), last build (timestamp + state), Allure server. Polls `lsof -i :PORT` + `docker ps --filter name=speculos`. Auto-hides when no Ledger work is active.
+Live process tracking (Metro :8081, Detox bridge :8099, Speculos `docker ps`, simulator/emulator, last build, Allure server — polled via `lsof` + `docker ps`) is the Builder dashboard's **Processes pane**, not a separate floating widget. A lightweight always-on statusline indicator could be a small future follow-up.
 
 #### State persistence 📋 [#22](https://github.com/jeportie/ledger.nvim/issues/22)
 
@@ -438,7 +454,7 @@ Planned (`<leader>L*` namespace):
 
 | Map | Feature | Issue |
 |---|---|---|
-| `<leader>Lb` | Builder board | [#7](https://github.com/jeportie/ledger.nvim/issues/7) |
+| `<leader>Lb` | Builder dashboard | [#7](https://github.com/jeportie/ledger.nvim/issues/7) |
 | `<leader>Lt` | Test Summary board | [#8](https://github.com/jeportie/ledger.nvim/issues/8) |
 | `<leader>Lp` | PR board | [#16](https://github.com/jeportie/ledger.nvim/issues/16) |
 | `<leader>Lg` | GitHub Actions board | [#17](https://github.com/jeportie/ledger.nvim/issues/17) |
@@ -460,9 +476,9 @@ Goal: from `:LedgerTasks` you can launch Metro + Detox build + iOS/Android test,
 
 - [ ] LN-002 feat(neotest): bundle Playwright+Detox config + keymaps into the suite ([#3](https://github.com/jeportie/ledger.nvim/issues/3))
 - [ ] LN-003 feat(env): Ledger env profiles via environment.nvim ([#4](https://github.com/jeportie/ledger.nvim/issues/4))
-- [ ] LN-004 feat(tasks): overseer.nvim + ledger task templates ([#5](https://github.com/jeportie/ledger.nvim/issues/5))
+- [ ] LN-004 feat(tasks): overseer backend + ledger task templates + process registry — *Builder backend, lands first* ([#5](https://github.com/jeportie/ledger.nvim/issues/5))
 - [ ] LN-005 feat(scripts): pnpm script picker ([#6](https://github.com/jeportie/ledger.nvim/issues/6))
-- [ ] LN-006 feat(builder): Builder board ([#7](https://github.com/jeportie/ledger.nvim/issues/7))
+- [ ] LN-006 feat(builder): **Builder dashboard** (umbrella — build/monitor/launch/test, folds in #20) ([#7](https://github.com/jeportie/ledger.nvim/issues/7))
 - [ ] LN-007 feat(test-summary): Test Summary board ([#8](https://github.com/jeportie/ledger.nvim/issues/8))
 - [ ] LN-008 feat(build): build-target picker ([#9](https://github.com/jeportie/ledger.nvim/issues/9))
 - [ ] LN-009 feat(artifacts): Allure / Playwright report / trace viewers ([#10](https://github.com/jeportie/ledger.nvim/issues/10))
@@ -485,9 +501,11 @@ Goal: GitHub PR/CI surface, Jira↔branch↔PR linker, persistent process monito
 - [ ] LN-013 feat(actions): GH Actions board ([#17](https://github.com/jeportie/ledger.nvim/issues/17))
 - [ ] LN-014 feat(workflow): `:LedgerStart QAA-XXXX` Jira↔branch↔PR linker ([#18](https://github.com/jeportie/ledger.nvim/issues/18))
 - [ ] LN-015 feat(test): triple-run gate command ([#19](https://github.com/jeportie/ledger.nvim/issues/19))
-- [ ] LN-016 feat(monitor): floating process monitor widget ([#20](https://github.com/jeportie/ledger.nvim/issues/20))
+- [x] ~~LN-016 floating process monitor~~ → folded into the Builder dashboard ([#20](https://github.com/jeportie/ledger.nvim/issues/20) → [#7](https://github.com/jeportie/ledger.nvim/issues/7))
 - [ ] LN-017 feat(allure): Allure board with flaky-test tracking ([#21](https://github.com/jeportie/ledger.nvim/issues/21))
 - [ ] LN-018 feat(persistence): state across `:q` ([#22](https://github.com/jeportie/ledger.nvim/issues/22))
+- [ ] LN-030 feat(builder): nx-affected staleness detection (v2) ([#34](https://github.com/jeportie/ledger.nvim/issues/34))
+- [ ] LN-031 feat(ui): evaluate mini.animate for board animation polish (v2) ([#35](https://github.com/jeportie/ledger.nvim/issues/35))
 
 ### Phase 3 — Polish
 - [ ] LN-021 feat(dap): nvim-dap-vscode-js for Playwright + Detox + apps/cli ([#23](https://github.com/jeportie/ledger.nvim/issues/23))
