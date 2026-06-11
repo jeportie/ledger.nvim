@@ -30,23 +30,25 @@ local function detox_build_cmd(opts)
   return prefix .. "pnpm mobile e2e:build -c " .. cfg
 end
 
--- Detox test command (run from e2e/mobile). Named wrappers when available,
--- otherwise the generic `detox test -c <config>`.
+-- Detox test command (root alias `pnpm e2e:mobile <script>`, run from repo
+-- root; pnpm executes the script inside the e2e/mobile workspace). Named
+-- wrappers when available, otherwise the generic `test:detox -- -c <config>`.
 local function detox_test_cmd(opts)
   local cfg = opts.config or "ios.sim.debug"
   local wrappers = {
-    ["ios.sim.debug"] = "pnpm test:ios:debug",
-    ["ios.sim.release"] = "pnpm test:ios",
-    ["android.emu.release"] = "pnpm test:android",
+    ["ios.sim.debug"] = "pnpm e2e:mobile test:ios:debug",
+    ["ios.sim.release"] = "pnpm e2e:mobile test:ios",
+    ["android.emu.release"] = "pnpm e2e:mobile test:android",
   }
-  local base = wrappers[cfg] or ("pnpm detox test -c " .. cfg)
+  local base = wrappers[cfg] or ("pnpm e2e:mobile test:detox -- -c " .. cfg)
   if opts.spec and opts.spec ~= "" then
     return base .. " " .. opts.spec
   end
   return base
 end
 
--- Playwright run command (run from e2e/desktop).
+-- Playwright run command (root alias `pnpm e2e:desktop test:playwright`, run
+-- from repo root; pnpm executes it inside the e2e/desktop workspace).
 local function pw_run_cmd(opts)
   local base = "pnpm e2e:desktop test:playwright"
   if opts.spec and opts.spec ~= "" then
@@ -124,7 +126,7 @@ M.templates = {
     label = "Desktop · install Playwright browser",
     platform = "desktop",
     kind = "install",
-    cwd = "e2e_desktop",
+    cwd = "repo",
     cmd = "pnpm e2e:desktop test:playwright:setup",
   },
   {
@@ -132,7 +134,7 @@ M.templates = {
     label = "Desktop · Playwright run",
     platform = "desktop",
     kind = "test",
-    cwd = "e2e_desktop",
+    cwd = "repo",
     cmd = pw_run_cmd,
   },
   {
@@ -140,7 +142,7 @@ M.templates = {
     label = "Desktop · Playwright @smoke",
     platform = "desktop",
     kind = "test",
-    cwd = "e2e_desktop",
+    cwd = "repo",
     cmd = 'pnpm e2e:desktop test:playwright --grep "@smoke"',
   },
   {
@@ -148,7 +150,7 @@ M.templates = {
     label = "Desktop · Allure report",
     platform = "desktop",
     kind = "report",
-    cwd = "e2e_desktop",
+    cwd = "repo",
     cmd = "pnpm e2e:desktop allure",
     daemon = true,
   },
@@ -184,7 +186,7 @@ M.templates = {
     label = "Mobile · pod install (iOS)",
     platform = "mobile",
     kind = "build",
-    cwd = "mobile_app",
+    cwd = "repo",
     cmd = "pnpm mobile pod",
     artifact = "apps/ledger-live-mobile/ios/Podfile.lock",
   },
@@ -210,7 +212,7 @@ M.templates = {
     label = "Mobile · Detox test",
     platform = "mobile",
     kind = "test",
-    cwd = "e2e_mobile",
+    cwd = "repo",
     cmd = detox_test_cmd,
   },
   {
@@ -218,7 +220,7 @@ M.templates = {
     label = "Mobile · e2e:ci orchestrator",
     platform = "mobile",
     kind = "test",
-    cwd = "mobile_app",
+    cwd = "repo",
     cmd = function(opts)
       local plat = opts.platform_flag or "ios"
       return "pnpm mobile e2e:ci -- -p " .. plat .. " -b -t"
@@ -229,7 +231,7 @@ M.templates = {
     label = "Mobile · Allure report",
     platform = "mobile",
     kind = "report",
-    cwd = "e2e_mobile",
+    cwd = "repo",
     cmd = "pnpm e2e:mobile allure",
     daemon = true,
   },

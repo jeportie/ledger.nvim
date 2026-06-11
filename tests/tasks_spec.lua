@@ -13,10 +13,18 @@ describe("ledger.tasks.templates", function()
     assert.is_false(spec.daemon)
   end)
 
-  it("resolves symbolic cwds", function()
-    assert.equals("/repo/e2e/desktop", templates.resolve("desktop.pw.run", {}, ROOT).cwd)
-    assert.equals("/repo/e2e/mobile", templates.resolve("mobile.detox.test", {}, ROOT).cwd)
-    assert.equals("/repo/apps/ledger-live-mobile", templates.resolve("mobile.pod", {}, ROOT).cwd)
+  it("runs every template from the repo root (root-alias convention)", function()
+    for _, id in ipairs(templates.ids()) do
+      assert.equals(ROOT, templates.resolve(id, {}, ROOT).cwd, id .. " should run from repo root")
+    end
+  end)
+
+  it("resolve_cwd still maps the workspace symbols (for future use)", function()
+    assert.equals("/repo", templates.resolve_cwd("repo", ROOT))
+    assert.equals("/repo/e2e/desktop", templates.resolve_cwd("e2e_desktop", ROOT))
+    assert.equals("/repo/e2e/mobile", templates.resolve_cwd("e2e_mobile", ROOT))
+    assert.equals("/repo/apps/ledger-live-mobile", templates.resolve_cwd("mobile_app", ROOT))
+    assert.equals("/repo", templates.resolve_cwd(nil, ROOT))
   end)
 
   it("marks daemons", function()
@@ -39,22 +47,22 @@ describe("ledger.tasks.templates", function()
 
     it("detox test maps known configs to wrappers and appends spec", function()
       assert.equals(
-        "pnpm test:ios:debug",
+        "pnpm e2e:mobile test:ios:debug",
         templates.resolve("mobile.detox.test", { config = "ios.sim.debug" }, ROOT).cmd
       )
       assert.equals(
-        "pnpm test:android",
+        "pnpm e2e:mobile test:android",
         templates.resolve("mobile.detox.test", { config = "android.emu.release" }, ROOT).cmd
       )
       assert.equals(
-        "pnpm test:ios:debug send.spec.ts",
+        "pnpm e2e:mobile test:ios:debug send.spec.ts",
         templates.resolve("mobile.detox.test", { config = "ios.sim.debug", spec = "send.spec.ts" }, ROOT).cmd
       )
     end)
 
     it("detox test falls back to generic detox for unknown configs", function()
       assert.equals(
-        "pnpm detox test -c ios.sim.prerelease",
+        "pnpm e2e:mobile test:detox -- -c ios.sim.prerelease",
         templates.resolve("mobile.detox.test", { config = "ios.sim.prerelease" }, ROOT).cmd
       )
     end)
