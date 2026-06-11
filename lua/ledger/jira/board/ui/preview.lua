@@ -38,6 +38,11 @@ end
 local _state = fresh_state()
 local _stack = {}
 
+-- Forward declaration: close() / refresh_preview_issue() and the closures in
+-- build_left/right_panel all call rerender() (assigned much later in the file).
+-- Must be declared before close() below or those calls resolve to a global.
+local rerender
+
 local function push_state()
   table.insert(_stack, _state)
   _state = fresh_state()
@@ -137,10 +142,6 @@ local function wrap_text(s, w)
   end
   return out
 end
-
--- Forward declaration so closures inside build_left/right_panel can call
--- rerender() (declared much later in the file).
-local rerender
 
 -- Focus navigation: cycle over volt-registered clickables, grouped by "side"
 -- (left = summary + description + lists, right = details panel). The row a
