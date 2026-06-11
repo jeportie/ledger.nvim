@@ -7,7 +7,7 @@ monorepo: Jira/Xray ticket management, Playwright + Detox test orchestration,
 build/process supervision, GitHub PR + Actions boards, Allure result browsing,
 and the multi-terminal choreography that QA Automation work on Ledger Live requires.
 
-> Status: pre-alpha. Tracking 25 issues across 4 phases. See
+> Status: pre-alpha. Tracking 28 issues across 4 phases. See
 > [Roadmap](#roadmap) below or the
 > [issues list](https://github.com/jeportie/ledger.nvim/issues) for current state.
 
@@ -134,6 +134,20 @@ Closes the most-missed step in the Ledger QA workflow (listed as a top-5 intern 
 #### K-hover bundling 📋 [#13](https://github.com/jeportie/ledger.nvim/issues/13)
 
 Currently the K-key override delegating to Xray lives in user LSP config. This feature exposes `require("ledger.xray").attach_hover_override()` so the plugin self-installs the override on `LspAttach`, eliminating the need for users to maintain their own K-binding.
+
+#### Interactive ticket creator — `:LedgerJiraCreate` 📋 [#30](https://github.com/jeportie/ledger.nvim/issues/30)
+
+A floating panel to create Jira tickets without leaving Neovim. Flow: pick **project** (QAA / LIVE / B2CQA) → pick **issue type** (driven by Jira's createmeta, no hardcoded type ids) → fill **summary** + **description** → optionally set assignee / reporter / priority / labels / team → submit, then open-in-browser / yank the new key.
+
+Presets a **bug template for `LIVE`**: `[SCOPE][SUBSCOPE]` summary scaffold, auto-added `qaa` label, and an STR/ER/AR (Steps / Expected / Actual) description skeleton — matching the documented "file a bug caught by E2E" flow. Adds `api.create_issue` + `api.get_create_meta` and a minimal plain-text→ADF builder.
+
+#### Inline reporter / priority / team selectors 📋 [#31](https://github.com/jeportie/ledger.nvim/issues/31)
+
+Extends the inline-edit actions (today: status + assignee) with **reporter**, **priority**, and **team** selectors, available in the Xray hover panel, the Xray search detail pane, and the Jira board for parity. Reporter reuses the assignee picker UX with `api.set_reporter`; priority promotes the existing board-local `priority_picker`; team resolves its Jira **custom field id** dynamically via `api.list_fields` (no hardcoded `customfield_XXXXX`). Lands after the picker consolidation ([#12](https://github.com/jeportie/ledger.nvim/issues/12)).
+
+#### LIVE- ticket support in Xray 📋 [#32](https://github.com/jeportie/ledger.nvim/issues/32)
+
+Today the `K` hover, `<leader>fx` search, and `<leader>xc` coverage only recognise `B2CQA-XXXX` ids. This adds `LIVE-XXXX` support so you can jump straight to a referenced product bug. The id pattern becomes config-driven (`projects = { "B2CQA", "LIVE" }`). Because `LIVE` issues are Bugs (not Xray Tests), the hover **degrades gracefully** — rendering standard fields and omitting the Test-only preconditions/steps/TMS sections. Coverage uses *reference-count* semantics for `LIVE-` ids rather than a coverage verdict.
 
 ### Test orchestration
 
@@ -455,6 +469,12 @@ Goal: from `:LedgerTasks` you can launch Metro + Detox build + iOS/Android test,
 - [ ] LN-010 feat(xray): `:XrayMarkAutomated` post-merge B2CQA flip ([#11](https://github.com/jeportie/ledger.nvim/issues/11))
 - [ ] LN-020 support(refactor): consolidate xray/pickers into ledger.jira.pickers ([#12](https://github.com/jeportie/ledger.nvim/issues/12))
 - [ ] LN-026 feat(xray): bundle K-hover override into ledger.nvim setup ([#13](https://github.com/jeportie/ledger.nvim/issues/13))
+
+**Jira/Xray track** (parallel — touches different code than the test chain above):
+
+- [ ] LN-027 feat(jira): interactive ticket creator panel ([#30](https://github.com/jeportie/ledger.nvim/issues/30))
+- [ ] LN-028 feat(jira): reporter / priority / team selectors in hover + search ([#31](https://github.com/jeportie/ledger.nvim/issues/31)) — after LN-020
+- [ ] LN-029 feat(xray): support LIVE- tickets in hover, search and coverage ([#32](https://github.com/jeportie/ledger.nvim/issues/32))
 
 ### Phase 2 — Workflow + boards
 Goal: GitHub PR/CI surface, Jira↔branch↔PR linker, persistent process monitoring, Allure flaky tracking.
