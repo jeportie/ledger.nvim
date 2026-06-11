@@ -143,7 +143,7 @@ Presets a **bug template for `LIVE`**: `[SCOPE][SUBSCOPE]` summary scaffold, aut
 
 #### Inline reporter / priority / team selectors 📋 [#31](https://github.com/jeportie/ledger.nvim/issues/31)
 
-Extends the inline-edit actions (today: status + assignee) with **reporter**, **priority**, and **team** selectors, available in the Xray hover panel, the Xray search detail pane, and the Jira board for parity. Reporter reuses the assignee picker UX with `api.set_reporter`; priority promotes the existing board-local `priority_picker`; team resolves its Jira **custom field id** dynamically via `api.list_fields` (no hardcoded `customfield_XXXXX`). Lands after the picker consolidation ([#12](https://github.com/jeportie/ledger.nvim/issues/12)).
+Adds **reporter**, **priority**, and **team** selectors to the Xray hover panel and the Xray search detail pane — the two surfaces that today have no inline field editing. The Jira board is out of scope: it already changes status via `t`, assignee via `m`/`a`/`u`, and reporter via the context menu. Reporter reuses the assignee picker UX with `api.set_reporter`; priority promotes the existing board-local `priority_picker`; team resolves its Jira **custom field id** dynamically via `api.list_fields` (no hardcoded `customfield_XXXXX`). Lands after the picker consolidation ([#12](https://github.com/jeportie/ledger.nvim/issues/12)).
 
 #### LIVE- ticket support in Xray 📋 [#32](https://github.com/jeportie/ledger.nvim/issues/32)
 
