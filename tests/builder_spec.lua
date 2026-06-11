@@ -169,6 +169,7 @@ describe("ledger.builder.ui.panes", function()
     config = "ios.sim.debug",
     root = "/repo/ledger-live",
     tick = 3,
+    focus = { col = "pipeline", idx = 2 },
     steps = {
       { id = "deps", label = "deps installed", template = "mobile.install" },
       { id = "build", label = "native app built", template = "mobile.detox.build" },
@@ -189,25 +190,36 @@ describe("ledger.builder.ui.panes", function()
     end
   end
 
-  it("renders all panes without error", function()
+  it("renders all pane content without error", function()
     is_lines(panes.header(fake))
-    is_lines(panes.pipeline(fake))
-    is_lines(panes.processes(fake))
+    is_lines(panes.pipeline_content(fake))
+    is_lines(panes.processes_content(fake))
+    is_lines(panes.logs_content(fake))
     is_lines(panes.footer(fake))
   end)
 
-  it("pipeline shows one row per step plus title/actions", function()
-    local lines = panes.pipeline(fake)
-    -- title + 3 steps + blank + actions = at least 5 lines
+  it("pipeline shows one row per step plus action hint", function()
+    local lines = panes.pipeline_content(fake)
     assert.is_true(#lines >= #fake.steps + 2)
   end)
 
   it("processes shows one row per process", function()
-    local lines = panes.processes(fake)
+    local lines = panes.processes_content(fake)
     assert.is_true(#lines >= #fake.procs + 1)
   end)
 
-  it("loads the controller and registers no error", function()
+  it("box wraps content with a titled border of stable width", function()
+    local boxed = panes.box("PIPELINE", panes.pipeline_content(fake), 44)
+    local ui = require("volt.ui")
+    -- first line is the titled top border; all lines share one width
+    local w0 = ui.line_w(boxed[1])
+    for _, line in ipairs(boxed) do
+      assert.equals(w0, ui.line_w(line))
+    end
+    assert.is_true(#boxed >= #panes.pipeline_content(fake) + 2) -- + top + bottom
+  end)
+
+  it("loads the controller and hl without error", function()
     assert.has_no.errors(function()
       require("ledger.builder")
       require("ledger.builder.ui.hl")

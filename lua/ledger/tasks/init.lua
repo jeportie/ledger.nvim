@@ -1,64 +1,17 @@
 -- ledger.tasks
 --
--- Runs the templates from ledger.tasks.templates. Prefers stevearc/overseer.nvim
--- when present (uniform start/restart/kill/log); otherwise falls back to a
--- terminal split so the backend is usable without overseer installed.
+-- Runs the templates from ledger.tasks.templates as BACKGROUND jobs (no
+-- terminal window steals focus). Output is captured into a per-task ring so
+-- the Builder dashboard can tail it. Liveness + last-result are queryable.
 
 local templates = require("ledger.tasks.templates")
 
 local M = {}
 
--- id -> { backend, spec, started, task? (overseer), job?, buf? }
-M._running = {}
+-- id -> { job, lines = {ring}, running, started, code, duration }
+M.tasks = {}
 
--- Build the `cd <cwd> && export <env> && <cmd>` shell string for the fallback.
-function M._shell_string(spec)
-  local parts = { "cd " .. vim.fn.shellescape(spec.cwd) }
-  if spec.env and next(spec.env) then
-    local ex = {}
-    for k, v in pairs(spec.env) do
-      ex[#ex + 1] = k .. "=" .. vim.fn.shellescape(tostring(v))
-    end
-    table.sort(ex)
-    parts[#parts + 1] = "export " .. table.concat(ex, " ")
-  end
-  parts[#parts + 1] = spec.cmd
-  return table.concat(parts, " && ")
-end
-
-local function run_overseer(overseer, spec)
-  local task = overseer.new_task({
-    name = spec.label,
-    cmd = { "sh", "-c", spec.cmd },
-    cwd = spec.cwd,
-    env = spec.env,
-    components = { "default" },
-  })
-  task:start()
-  return task
-end
-
-local function run_terminal(spec)
-  local shell = M._shell_string(spec)
-  -- A fresh scratch buffer in a new split: `jobstart(term=true)` requires the
-  -- target buffer to be empty/unmodified, so we must not reuse the buffer the
-  -- split inherits from the current window.
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.cmd("botright " .. (spec.daemon and "10" or "15") .. "split")
-  local win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(win, buf)
-  local job = vim.fn.jobstart(shell, {
-    term = true,
-    on_exit = function(_, code)
-      vim.schedule(function()
-        local lvl = code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR
-        vim.notify(spec.label .. (code == 0 and " completed" or (" failed (exit " .. code .. ")")), lvl)
-      end)
-    end,
-  })
-  vim.cmd("wincmd p")
-  return job, buf
-end
+local RING_MAX = 1000
 
 -- Resolve the monorepo root: configured `monorepo_root` wins, else detect from
 -- cwd. Returns nil if neither points at a ledger-live checkout.
@@ -79,7 +32,11 @@ function M.resolve_root()
   return nil
 end
 
--- Run a template by id with opts. Returns true on launch.
+local function fmt_label(spec)
+  return spec.label or spec.id
+end
+
+-- Run a template by id with opts, in the background. Returns true on launch.
 function M.run(id, opts)
   local root = M.resolve_root()
   if not root then
@@ -95,50 +52,94 @@ function M.run(id, opts)
     vim.notify("ledger.tasks: " .. tostring(err), vim.log.levels.ERROR)
     return false, err
   end
-  local has_overseer, overseer = pcall(require, "overseer")
-  if has_overseer then
-    local task = run_overseer(overseer, spec)
-    M._running[id] = { backend = "overseer", task = task, spec = spec, started = os.time() }
-  else
-    local job, buf = run_terminal(spec)
-    M._running[id] = { backend = "term", job = job, buf = buf, spec = spec, started = os.time() }
-  end
-  vim.notify("▶ " .. spec.label, vim.log.levels.INFO)
-  return true
-end
 
--- Is a launched task still running?
-function M.is_running(id)
-  local r = M._running[id]
-  if not r then
-    return false
-  end
-  if r.backend == "overseer" then
-    return r.task and not r.task:is_complete()
-  end
-  return r.job ~= nil and vim.fn.jobwait({ r.job }, 0)[1] == -1
-end
-
--- Stop a launched task.
-function M.stop(id)
-  local r = M._running[id]
-  if not r then
-    return false
-  end
-  if r.backend == "overseer" then
-    if r.task then
-      r.task:stop()
+  local rec = { lines = {}, running = true, started = os.time() }
+  local function append(data)
+    for _, line in ipairs(data) do
+      if line ~= "" then
+        rec.lines[#rec.lines + 1] = line
+        if #rec.lines > RING_MAX then
+          table.remove(rec.lines, 1)
+        end
+      end
     end
-  elseif r.job then
-    vim.fn.jobstop(r.job)
   end
-  M._running[id] = nil
+
+  rec.job = vim.fn.jobstart({ "sh", "-c", spec.cmd }, {
+    cwd = spec.cwd,
+    env = spec.env,
+    on_stdout = function(_, data)
+      append(data)
+    end,
+    on_stderr = function(_, data)
+      append(data)
+    end,
+    on_exit = function(_, code)
+      rec.running = false
+      rec.code = code
+      rec.duration = os.time() - rec.started
+      vim.schedule(function()
+        local lvl = code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR
+        vim.notify(
+          (code == 0 and "✓ " or "✗ ") .. fmt_label(spec) .. (code == 0 and "" or (" (exit " .. code .. ")")),
+          lvl
+        )
+      end)
+    end,
+  })
+
+  if not rec.job or rec.job <= 0 then
+    vim.notify("ledger.tasks: failed to start " .. fmt_label(spec), vim.log.levels.ERROR)
+    return false
+  end
+
+  M.tasks[id] = rec
+  M.last_started = id
+  vim.notify("▶ " .. fmt_label(spec), vim.log.levels.INFO)
   return true
 end
 
--- The currently-tracked tasks (for the dashboard).
+function M.is_running(id)
+  local r = M.tasks[id]
+  return r ~= nil and r.running == true
+end
+
+function M.stop(id)
+  local r = M.tasks[id]
+  if r and r.job then
+    vim.fn.jobstop(r.job)
+    r.running = false
+    return true
+  end
+  return false
+end
+
+-- Last `n` captured lines for a task id (running or finished).
+function M.log_tail(id, n)
+  local r = M.tasks[id]
+  if not r then
+    return {}
+  end
+  n = n or 8
+  local out = {}
+  local start = math.max(1, #r.lines - n + 1)
+  for i = start, #r.lines do
+    out[#out + 1] = r.lines[i]
+  end
+  return out
+end
+
+-- { code, duration } for a finished task, or nil.
+function M.last_result(id)
+  local r = M.tasks[id]
+  if r and not r.running and r.code ~= nil then
+    return { code = r.code, duration = r.duration }
+  end
+  return nil
+end
+
 function M.running()
-  return M._running
+  return M.tasks
 end
 
 -- :LedgerTask <id> [k=v ...]
@@ -163,7 +164,7 @@ function M.register_commands()
     M.run(id, parse_opts(a.fargs))
   end, {
     nargs = "+",
-    desc = "Run a ledger build/test task",
+    desc = "Run a ledger build/test task (background)",
     complete = function(arglead)
       local out = {}
       for _, id in ipairs(templates.ids()) do
@@ -191,7 +192,7 @@ function M.register_commands()
         M.run(choice.id)
       end
     end)
-  end, { desc = "Pick and run a ledger build/test task" })
+  end, { desc = "Pick and run a ledger build/test task (background)" })
 end
 
 return M

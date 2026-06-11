@@ -1,16 +1,16 @@
 -- ledger.builder
 --
 -- The Builder dashboard (LN-006). A volt float that renders the desktop/mobile
--- E2E pipeline (with mtime staleness), live process cards, and runs tasks via
--- ledger.tasks. Increment 1: header + pipeline + processes, platform toggle,
--- refresh, spinner animation, per-step run. (log tail / history / stats /
--- neotest handoff are increment 2.)
+-- E2E pipeline (with mtime staleness), live process cards, and a log tail; runs
+-- tasks in the background via ledger.tasks. 2D focus navigation (h/l columns,
+-- j/k/arrows/Tab within, Enter to activate). (history / stats graphs / neotest
+-- handoff are a later increment.)
 
 local uv = vim.uv or vim.loop
 
 local M = {}
 
-local W = 92
+local W = 96
 local SPIN_MS = 120
 local PROC_REFRESH_EVERY = 16 -- ticks (~2s) between process liveness polls
 
@@ -24,7 +24,30 @@ local function default_config()
   return "ios.sim.debug"
 end
 
--- Recompute pipeline step statuses + process liveness into state.
+local function focus_len(col)
+  if not state then
+    return 0
+  end
+  if col == "processes" then
+    return #(state.procs or {})
+  end
+  return #(state.steps or {})
+end
+
+local function clamp_focus()
+  local len = focus_len(state.focus.col)
+  if len == 0 then
+    state.focus.idx = 1
+    return
+  end
+  if state.focus.idx < 1 then
+    state.focus.idx = 1
+  elseif state.focus.idx > len then
+    state.focus.idx = len
+  end
+end
+
+-- Full recompute: pipeline statuses + process liveness (shell).
 local function refresh_statuses()
   if not state then
     return
@@ -36,8 +59,6 @@ local function refresh_statuses()
   local detox = require("ledger.detox")
 
   state.steps = pipeline.steps(state.platform, { platform_flag = state.platform_flag })
-
-  -- process liveness (shell) once, into a map
   state.procs = proc.status_all()
   local alive = {}
   for _, p in ipairs(state.procs) do
@@ -63,16 +84,16 @@ local function refresh_statuses()
 
   state.statuses = {}
   for _, step in ipairs(state.steps) do
-    -- a running task for this step's template overrides the static status
-    if step.template and tasks.is_running and tasks.is_running(step.template) then
+    if step.template and tasks.is_running(step.template) then
       state.statuses[step.id] = "running"
     else
       state.statuses[step.id] = pipeline.status(step, ctx)
     end
   end
+  clamp_focus()
 end
 
--- Light refresh: process liveness + running-task overlay only (no find/staleness).
+-- Light recompute: process liveness + running overlay (no find/staleness).
 local function refresh_runtime()
   if not state then
     return
@@ -81,10 +102,9 @@ local function refresh_runtime()
   local tasks = require("ledger.tasks")
   state.procs = proc.status_all()
   for _, step in ipairs(state.steps or {}) do
-    if step.template and tasks.is_running and tasks.is_running(step.template) then
+    if step.template and tasks.is_running(step.template) then
       state.statuses[step.id] = "running"
     elseif state.statuses[step.id] == "running" then
-      -- task finished; fall back to a full recompute for this step lazily
       state.statuses[step.id] = "ready"
     end
   end
@@ -103,9 +123,16 @@ local function sections()
     {
       name = "body",
       lines = function()
+        local left = panes.box("PIPELINE", panes.pipeline_content(state), 44)
+        local right = panes.box("PROCESSES", panes.processes_content(state), 42)
+        right[#right + 1] = {}
+        local logs = panes.box("LOGS", panes.logs_content(state), 42)
+        for _, l in ipairs(logs) do
+          right[#right + 1] = l
+        end
         return ui.grid_col({
-          { lines = panes.pipeline(state), w = 46, pad = 2 },
-          { lines = panes.processes(state), w = 42 },
+          { lines = left, w = 48, pad = 2 },
+          { lines = right, w = 46 },
         })
       end,
     },
@@ -152,11 +179,127 @@ local function stop_timer()
   end
 end
 
+-- Run the ledger.tasks template for a pipeline step / template id (background).
+function M.run_template(template)
+  local tasks = require("ledger.tasks")
+  local opts = {}
+  if state.platform == "mobile" then
+    opts.config = state.config
+    opts.platform_flag = state.platform_flag
+  end
+  tasks.run(template, opts)
+  vim.defer_fn(function()
+    refresh_runtime()
+    redraw("body")
+  end, 250)
+end
+
+-- Activate the focused item: run a step, or toggle a process.
+local function activate()
+  if state.focus.col == "pipeline" then
+    local step = (state.steps or {})[state.focus.idx]
+    if step and step.template then
+      M.run_template(step.template)
+    else
+      vim.notify("Builder: '" .. (step and step.label or "?") .. "' has no run action", vim.log.levels.WARN)
+    end
+  else
+    local p = (state.procs or {})[state.focus.idx]
+    if not p then
+      return
+    end
+    local proc = require("ledger.builder.proc")
+    if p.alive then
+      proc.stop(p.name)
+    else
+      local ok, err = proc.start(p.name)
+      if not ok then
+        vim.notify("Builder: " .. tostring(err), vim.log.levels.WARN)
+      end
+    end
+    vim.defer_fn(function()
+      refresh_runtime()
+      redraw("body")
+    end, 350)
+  end
+end
+
+local function proc_action(kind)
+  if state.focus.col ~= "processes" then
+    vim.notify("Builder: " .. kind .. " acts on a process — switch with l/→", vim.log.levels.INFO)
+    return
+  end
+  local p = (state.procs or {})[state.focus.idx]
+  if not p then
+    return
+  end
+  local proc = require("ledger.builder.proc")
+  if kind == "kill" then
+    proc.stop(p.name)
+  elseif kind == "start" then
+    local ok, err = proc.start(p.name)
+    if not ok then
+      vim.notify("Builder: " .. tostring(err), vim.log.levels.WARN)
+    end
+  end
+  vim.defer_fn(function()
+    refresh_runtime()
+    redraw("body")
+  end, 350)
+end
+
 local function set_keymaps()
   local buf = state.buf
   local function map(lhs, fn)
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true })
   end
+
+  local function move(delta)
+    state.focus.idx = state.focus.idx + delta
+    clamp_focus()
+    redraw("body")
+  end
+  local function switch(col)
+    state.focus.col = col
+    clamp_focus()
+    redraw("body")
+  end
+
+  for _, k in ipairs({ "j", "<Down>", "<Tab>" }) do
+    map(k, function()
+      move(1)
+    end)
+  end
+  for _, k in ipairs({ "k", "<Up>", "<S-Tab>" }) do
+    map(k, function()
+      move(-1)
+    end)
+  end
+  for _, k in ipairs({ "l", "<Right>" }) do
+    map(k, function()
+      switch("processes")
+    end)
+  end
+  for _, k in ipairs({ "h", "<Left>" }) do
+    map(k, function()
+      switch("pipeline")
+    end)
+  end
+  map("<CR>", activate)
+  map("x", function()
+    proc_action("kill")
+  end)
+  map("s", function()
+    proc_action("start")
+  end)
+  map("B", function()
+    M.run_step_by_id("build")
+  end)
+  map("R", function()
+    refresh_statuses()
+    redraw("all")
+    vim.notify("Builder: refreshed", vim.log.levels.INFO)
+  end)
   map("D", function()
     state.platform = "desktop"
     refresh_statuses()
@@ -167,38 +310,8 @@ local function set_keymaps()
     refresh_statuses()
     redraw("all")
   end)
-  map("R", function()
-    refresh_statuses()
-    redraw("all")
-    vim.notify("Builder: refreshed", vim.log.levels.INFO)
-  end)
-  map("B", function()
-    M.run_step_by_id("build")
-  end)
-  -- run step N
-  for i = 1, 9 do
-    map(tostring(i), function()
-      local step = (state.steps or {})[i]
-      if step and step.template then
-        M.run_template(step.template)
-      end
-    end)
-  end
-end
-
-function M.run_template(template)
-  local tasks = require("ledger.tasks")
-  local opts = {}
-  if state.platform == "mobile" then
-    opts.config = state.config
-    opts.platform_flag = state.platform_flag
-  end
-  tasks.run(template, opts)
-  -- reflect "running" immediately
-  vim.defer_fn(function()
-    refresh_runtime()
-    redraw("body")
-  end, 200)
+  map("q", M.close)
+  map("<Esc>", M.close)
 end
 
 function M.run_step_by_id(id)
@@ -232,6 +345,7 @@ function M.open()
     config = default_config(),
     tick = 0,
     root = root,
+    focus = { col = "pipeline", idx = 1 },
     buf = vim.api.nvim_create_buf(false, true),
     ns = vim.api.nvim_create_namespace("ledger_builder"),
     steps = {},
@@ -245,7 +359,7 @@ function M.open()
   volt.gen_data({ { buf = state.buf, layout = layout, xpad = 2, ns = state.ns } })
 
   local h = require("volt.state")[state.buf].h
-  local height = math.max(8, math.min(h, math.floor(vim.o.lines * 0.85)))
+  local height = math.max(8, math.min(h, math.floor(vim.o.lines * 0.9)))
   local width = W + 4
   state.win = vim.api.nvim_open_win(state.buf, true, {
     relative = "editor",
@@ -261,23 +375,32 @@ function M.open()
   vim.api.nvim_set_option_value("winhighlight", "Normal:Normal,FloatBorder:LedgerBuilderTitle", { win = state.win })
 
   volt.run(state.buf, { h = h, w = W })
-  volt.mappings({
-    bufs = { state.buf },
-    after_close = function()
-      stop_timer()
-      state = nil
+  set_keymaps()
+
+  -- Clean up if the window is closed by any means.
+  vim.api.nvim_create_autocmd("WinClosed", {
+    buffer = state.buf,
+    once = true,
+    callback = function()
+      vim.schedule(M.close)
     end,
   })
-  set_keymaps()
+
   start_timer()
 end
 
 function M.close()
-  if state and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
-    require("volt").close(state.buf)
-  end
   stop_timer()
-  state = nil
+  if state then
+    local win, buf = state.win, state.buf
+    state = nil
+    if win and vim.api.nvim_win_is_valid(win) then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
+  end
 end
 
 function M.toggle()
