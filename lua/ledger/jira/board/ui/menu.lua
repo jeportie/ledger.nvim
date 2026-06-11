@@ -108,7 +108,7 @@ function M.items_for_issue(issue)
   table.insert(items, {
     name = "  Filter picker",
     cmd = function()
-      local ok, filter = pcall(require, "jira-board.ui.filter_picker")
+      local ok, filter = pcall(require, "ledger.jira.board.ui.filter_picker")
       if ok and filter.open then
         filter.open()
       end

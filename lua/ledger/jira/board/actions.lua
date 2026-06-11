@@ -221,7 +221,7 @@ function M.preview_selected()
   if not issue then
     return
   end
-  local ok, preview = pcall(require, "jira-board.ui.preview")
+  local ok, preview = pcall(require, "ledger.jira.board.ui.preview")
   if ok and preview.open then
     preview.open(issue)
   else

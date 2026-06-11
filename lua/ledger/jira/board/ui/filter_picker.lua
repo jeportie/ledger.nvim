@@ -11,7 +11,7 @@ local CATEGORIES = {
 }
 
 local function rerender_board()
-  local ok, win = pcall(require, "jira-board.ui.window")
+  local ok, win = pcall(require, "ledger.jira.board.ui.window")
   if ok and win.is_open() then
     win.rerender()
   end
