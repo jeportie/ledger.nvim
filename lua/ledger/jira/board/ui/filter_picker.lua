@@ -27,12 +27,10 @@ function M.open_category(cat)
 
   local current_set = store.state.filters[cat] or {}
   local label_to_id = {}
-  local id_to_label = {}
   local label_list = {}
   local current_labels = {}
   for _, opt in ipairs(options) do
     label_to_id[opt.label] = opt.id
-    id_to_label[opt.id] = opt.label
     table.insert(label_list, opt.label)
     if current_set[opt.id] then
       table.insert(current_labels, opt.label)
