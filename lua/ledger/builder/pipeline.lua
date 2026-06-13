@@ -59,15 +59,28 @@ M.mobile = {
 function M.steps(platform, opts)
   opts = opts or {}
   local list = platform == "mobile" and M.mobile or M.desktop
+  local android = opts.platform_flag == "android"
   -- shallow copy so per-session resolution (device proc) doesn't mutate defs
   local out = {}
   for _, s in ipairs(list) do
-    local step = vim.tbl_extend("keep", {}, s)
-    if step.id == "device" and opts.platform_flag == "android" then
-      step.proc = "android_emu"
-      step.label = "emulator"
+    -- iOS-only steps (pods) are dropped on Android
+    if not (s.ios_only and android) then
+      local step = vim.tbl_extend("keep", {}, s)
+      if step.id == "device" and android then
+        step.proc = "android_emu"
+        step.label = "emulator"
+      end
+      -- Android needs `adb reverse` (Metro + Detox bridge) before the test step
+      if step.id == "test" and android then
+        out[#out + 1] = {
+          id = "adb",
+          label = "adb reverse",
+          template = "shared.adb.reverse",
+          kind = "util",
+        }
+      end
+      out[#out + 1] = step
     end
-    out[#out + 1] = step
   end
   return out
 end

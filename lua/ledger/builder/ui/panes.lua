@@ -1,19 +1,19 @@
 -- ledger.builder.ui.panes
 --
--- Pure-ish renderers: each returns a list of volt lines (a line is a list of
--- { text, hlgroup, action? } segments — a 3rd element makes the segment
--- mouse-clickable / <CR>-activatable via volt). The controller (builder.init)
--- owns state and supplies on_* callbacks. Focus is 2D: state.focus = {col, idx}.
+-- Renderers returning volt lines (a line = list of { text, hl, action? }
+-- segments; a 3rd element makes the segment mouse-clickable). The controller
+-- (builder.init) owns state + supplies on_* callbacks and boxes the section
+-- content into the two cycling panes. No inline shortcut hints — shortcuts live
+-- in the `?` cheatsheet only.
 
 local M = {}
 
 local SPIN = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
-
 M.spin = SPIN
 
-local function glyph(s, tick)
+local function glyph(s, tick, hlmod)
   if s == "running" then
-    return SPIN[(tick % #SPIN) + 1], "LedgerStateRunning"
+    return SPIN[(tick % #SPIN) + 1], hlmod and hlmod(tick) or "LedgerStateRunning"
   elseif s == "done" then
     return "✓", "LedgerStateDone"
   elseif s == "stale" then
@@ -41,7 +41,7 @@ local function focus_gutter(focused)
   return { "  ", "LedgerBuilderDim" }
 end
 
--- Titled bordered box around `content` lines, fixed inner width `inner_w`.
+-- Titled bordered box around `content`, fixed inner width.
 function M.box(title, content, inner_w, hl)
   hl = hl or "LedgerBuilderDim"
   local ui = require("volt.ui")
@@ -64,53 +64,82 @@ function M.box(title, content, inner_w, hl)
   return out
 end
 
--- Header: title + platform toggle + repo/branch + mock/device.
+-- Header: clickable Desktop/Mobile tabs (+ iOS/Android subtabs on mobile),
+-- repo name, and a clickable device/env chip. No window title (the border has
+-- it) and no shortcut hints (those live under `?`).
 function M.header(st)
-  local function tog(p, label)
-    local on = st.platform == p
-    local seg = { (on and "● " or "○ ") .. label, on and "LedgerBuilderOn" or "LedgerBuilderOff" }
-    if st.on_platform then
-      seg[3] = function()
-        st.on_platform(p)
-      end
+  local function tab(label, active, cb)
+    local seg = { " " .. label .. " ", active and "LedgerTabActive" or "LedgerTabInactive" }
+    if cb then
+      seg[3] = cb
     end
     return seg
   end
-  local repo = st.root and ("repo: " .. vim.fn.fnamemodify(st.root, ":t")) or "no ledger-live repo (set monorepo_root)"
-  local branch = st.branch and ("  @" .. st.branch) or ""
+
+  local tabs_line = {
+    { "  " },
+    tab("Desktop", st.platform == "desktop", st.on_platform and function()
+      st.on_platform("desktop")
+    end),
+    { " " },
+    tab("Mobile", st.platform == "mobile", st.on_platform and function()
+      st.on_platform("mobile")
+    end),
+  }
+
+  local lines = { tabs_line }
+
+  if st.platform == "mobile" then
+    lines[#lines + 1] = {
+      { "    " },
+      tab("iOS", st.platform_flag == "ios", st.on_subplatform and function()
+        st.on_subplatform("ios")
+      end),
+      { " " },
+      tab("Android", st.platform_flag == "android", st.on_subplatform and function()
+        st.on_subplatform("android")
+      end),
+    }
+  end
+
+  local repo = st.root and vim.fn.fnamemodify(st.root, ":t") or "no ledger-live repo"
   local meta = {
     { "  " },
-    { "MOCK=" .. (st.mock or "0"), "LedgerBuilderDim" },
-    { "   " },
-    { st.device or "nanoSP", "LedgerBuilderDim" },
+    { "󰉋 " .. repo, "LedgerBuilderDim" },
+    { "    " },
+    { "device: ", "LedgerBuilderDim" },
+    {
+      st.device or "nanoSP",
+      "LedgerBuilderKey",
+      st.on_device and function()
+        st.on_device()
+      end or nil,
+    },
   }
   if st.platform == "mobile" then
-    meta[#meta + 1] = { "   " }
-    meta[#meta + 1] = { st.config, "LedgerBuilderKey" }
+    meta[#meta + 1] = { "   env: ", "LedgerBuilderDim" }
+    meta[#meta + 1] = {
+      st.config,
+      "LedgerBuilderKey",
+      st.on_env and function()
+        st.on_env()
+      end or nil,
+    }
   end
-  return {
-    { { "  Ledger Builder", "LedgerBuilderTitle" } },
-    {
-      { "  " },
-      tog("desktop", "Desktop"),
-      { "   " },
-      tog("mobile", "Mobile"),
-      { "      " },
-      { repo, "LedgerBuilderDim" },
-      { branch, "LedgerBuilderDim" },
-    },
-    meta,
-    {},
-  }
+  lines[#lines + 1] = meta
+  lines[#lines + 1] = {}
+  return lines
 end
 
--- Pipeline column content (step rows + action hint).
+-- ── ring sections (content only; controller boxes them) ─────────────────────
+
 function M.pipeline_content(st)
   local tasks = require("ledger.tasks")
+  local hl = require("ledger.builder.ui.hl")
   local lines = {}
   for i, step in ipairs(st.steps or {}) do
     local state = (st.statuses or {})[step.id] or "pending"
-    local g, hl = glyph(state, st.tick or 0)
+    local g, ghl = glyph(state, st.tick or 0, state == "running" and hl.pulse or nil)
     local focused = st.focus and st.focus.col == "pipeline" and st.focus.idx == i
     local label_seg = { " " .. step.label, focused and "LedgerBuilderTitle" or "Normal" }
     if st.on_step then
@@ -121,39 +150,25 @@ function M.pipeline_content(st)
     local row = {
       focus_gutter(focused),
       { tostring(i) .. " ", "LedgerBuilderDim" },
-      { g, hl },
+      { g, ghl },
       label_seg,
     }
     if state == "stale" then
       row[#row + 1] = { "  stale", "LedgerStateStale" }
     elseif state == "running" then
-      row[#row + 1] = { "  …", "LedgerStateRunning" }
+      row[#row + 1] = { "  …", ghl }
     else
       local res = step.template and tasks.last_result(step.template) or nil
       if res then
-        local d = fmt_dur(res.duration)
-        row[#row + 1] = { "  " .. (d or ""), res.code == 0 and "LedgerStateDone" or "LedgerStateFailed" }
+        row[#row + 1] =
+          { "  " .. (fmt_dur(res.duration) or ""), res.code == 0 and "LedgerStateDone" or "LedgerStateFailed" }
       end
     end
     lines[#lines + 1] = row
   end
-  lines[#lines + 1] = {}
-  local function btn(text, hl, cb)
-    return cb and { text, hl, cb } or { text, hl }
-  end
-  lines[#lines + 1] = {
-    { "  " },
-    btn("⏎", "LedgerBuilderKey", st.on_run),
-    { " run  " },
-    btn("B", "LedgerBuilderKey", st.on_build),
-    { " build  " },
-    btn("R", "LedgerBuilderKey", st.on_refresh),
-    { " refresh" },
-  }
   return lines
 end
 
--- Processes column content.
 function M.processes_content(st)
   local lines = {}
   for i, p in ipairs(st.procs or {}) do
@@ -178,22 +193,9 @@ function M.processes_content(st)
     end
     lines[#lines + 1] = row
   end
-  lines[#lines + 1] = {}
-  local function btn(text, hl, cb)
-    return cb and { text, hl, cb } or { text, hl }
-  end
-  lines[#lines + 1] = {
-    { "  " },
-    btn("⏎", "LedgerBuilderKey", st.on_proc_toggle),
-    { " start/stop  " },
-    btn("x", "LedgerBuilderKey", st.on_kill),
-    { " kill" },
-  }
   return lines
 end
 
--- Logs column content: tail of the focused step's task (or last started).
--- `height` controls how many lines are shown.
 function M.logs_content(st, height)
   local tasks = require("ledger.tasks")
   local id
@@ -202,15 +204,15 @@ function M.logs_content(st, height)
     id = step and step.template or nil
   end
   id = id or tasks.last_started
-  local tail = id and tasks.log_tail(id, height or 6) or {}
+  local tail = id and tasks.log_tail(id, height or 12) or {}
   if #tail == 0 then
-    return { { { "  (no output yet — run a step)", "LedgerBuilderDim" } } }
+    return { { { "(no output yet — run a step)", "LedgerBuilderDim" } } }
   end
   local lines = {}
   for _, l in ipairs(tail) do
     local txt = l:gsub("\t", "  ")
-    if #txt > 40 then
-      txt = txt:sub(1, 39) .. "…"
+    if #txt > 50 then
+      txt = txt:sub(1, 49) .. "…"
     end
     local hl = "LedgerBuilderDim"
     if txt:match("[Ee]rror") or txt:match("✗") then
@@ -218,73 +220,139 @@ function M.logs_content(st, height)
     elseif txt:match("✓") or txt:match("[Dd]one") then
       hl = "LedgerStateDone"
     end
-    lines[#lines + 1] = { { "  " .. txt, hl } }
+    lines[#lines + 1] = { { txt, hl } }
   end
   return lines
 end
 
--- Cheatsheet content: every action, the key, what it does, and the command /
--- purpose. Rendered (boxed) by the controller when `?` is toggled.
+-- Stats: HISTORY table + BUILD-TIME bar graph + PASS-RATE bar.
+function M.stats_content(st, inner_w)
+  local history = require("ledger.builder.history")
+  local ui = require("volt.ui")
+  local lines = {}
+
+  -- HISTORY (last 8, newest last)
+  local recent = history.recent(8)
+  local tb = { { "time", "task", "dur", "ok" } }
+  for _, e in ipairs(recent) do
+    tb[#tb + 1] = {
+      os.date("%H:%M", e.time),
+      (e.label or "?"):gsub("^%S+%s*·%s*", ""),
+      fmt_dur(e.duration) or "-",
+      e.code == 0 and "✓" or "✗",
+    }
+  end
+  if #recent == 0 then
+    tb[#tb + 1] = { "—", "no runs yet", "—", "—" }
+  end
+  local tbl = ui.table(tb, "fit", "LedgerBuilderTitle", { "  History" })
+  for _, l in ipairs(tbl) do
+    lines[#lines + 1] = l
+  end
+  lines[#lines + 1] = {}
+
+  -- BUILD TIME bar graph (recent build durations, normalised to 0-100)
+  local durs = history.build_durations(12)
+  if #durs > 0 then
+    local maxd = 1
+    for _, d in ipairs(durs) do
+      maxd = math.max(maxd, d)
+    end
+    local norm = {}
+    for _, d in ipairs(durs) do
+      norm[#norm + 1] = math.floor((d / maxd) * 100)
+    end
+    local bars = ui.graphs.bar({
+      val = norm,
+      footer_label = { "  build time (last " .. #durs .. ")" },
+      format_labels = function(x)
+        return tostring(math.floor((x / 100) * maxd)) .. "s"
+      end,
+      baropts = {
+        w = 2,
+        gap = 1,
+        format_hl = function(x)
+          if x > 80 then
+            return "LedgerStateFailed"
+          elseif x > 50 then
+            return "LedgerStateStale"
+          end
+          return "LedgerStateDone"
+        end,
+      },
+      w = inner_w,
+    })
+    for _, l in ipairs(bars) do
+      lines[#lines + 1] = l
+    end
+  else
+    lines[#lines + 1] = { { "  build time: no builds yet", "LedgerBuilderDim" } }
+  end
+  lines[#lines + 1] = {}
+
+  -- PASS RATE bar
+  local rate, n = history.pass_rate(50)
+  if rate then
+    local bar = ui.progressbar({
+      w = math.max(10, inner_w - 18),
+      val = rate,
+      icon = { on = "█", off = "░" },
+      hl = { on = rate >= 80 and "LedgerStateDone" or "LedgerStateStale", off = "LedgerBuilderDim" },
+    })
+    table.insert(bar, 1, { "  pass " })
+    bar[#bar + 1] = { "  " .. rate .. "%  (" .. n .. ")", "LedgerBuilderDim" }
+    lines[#lines + 1] = bar
+  else
+    lines[#lines + 1] = { { "  pass rate: no test runs yet", "LedgerBuilderDim" } }
+  end
+
+  return lines
+end
+
+-- Wrong-folder banner (not inside a LedgerHQ-ledger-live checkout).
+function M.wrong_folder_content()
+  return {
+    {},
+    { { "  ⚠ not inside a LedgerHQ-ledger-live checkout", "LedgerStateFailed" } },
+    {},
+    { { "  Builder actions are disabled.", "LedgerBuilderDim" } },
+    { { "  cd into the monorepo, or set ", "LedgerBuilderDim" }, { "monorepo_root", "LedgerBuilderKey" } },
+    { { "  in require('ledger').setup{}.", "LedgerBuilderDim" } },
+  }
+end
+
+-- Cheatsheet (the `?` overlay): every key, what it does, the command/purpose.
 function M.cheatsheet()
   local function row(key, desc, detail)
     return {
       { "  " },
       { key, "LedgerBuilderKey" },
-      { string.rep(" ", math.max(1, 10 - #key)) },
-      { desc },
+      { string.rep(" ", math.max(1, 12 - #key)) },
+      { desc, "Normal" },
       { detail and ("   " .. detail) or "", "LedgerBuilderDim" },
     }
   end
   return {
+    { { "  Tabs / panes", "LedgerBuilderTitle" } },
+    row("D / M", "desktop / mobile platform"),
+    row("i / a", "iOS / Android subtab (mobile)"),
+    row("Ctrl-t", "cycle the visible panes", "Pipeline▸Processes▸Logs▸Stats"),
+    {},
     { { "  Navigation", "LedgerBuilderTitle" } },
-    row("h / ←", "focus the pipeline column"),
-    row("l / →", "focus the processes column"),
+    row("h / l / ←→", "switch focus column"),
     row("j k ↑↓ ⇥", "move within a column"),
-    row("mouse", "click any step / process / button"),
+    row("mouse", "click any item / tab / button"),
     {},
-    { { "  Pipeline", "LedgerBuilderTitle" } },
-    row("⏎", "run the focused step", "→ pnpm task (background)"),
-    row("B", "build", "→ desktop build:testing / detox build"),
-    row("R", "refresh", "recompute staleness + process liveness"),
-    {},
-    { { "  Processes", "LedgerBuilderTitle" } },
-    row("⏎", "start / stop the focused process"),
-    row("x", "kill the focused process", "lsof kill / docker rm -f"),
-    row("s", "start the focused process", "Metro / dev:lld templates"),
+    { { "  Actions", "LedgerBuilderTitle" } },
+    row("⏎", "run focused step / toggle process", "→ background pnpm task"),
+    row("B", "build", "→ build:testing / detox build"),
+    row("x / s", "kill / start focused process"),
+    row("R", "refresh staleness + liveness"),
+    row("e", "device / env dropdown"),
     {},
     { { "  View", "LedgerBuilderTitle" } },
-    row("D / M", "switch desktop / mobile platform"),
-    row("+ / -", "grow / shrink the LOGS pane"),
     row("?", "toggle this help"),
-    row("q / Esc", "close the dashboard"),
-  }
-end
-
--- Footer: nav + action hints.
-function M.footer(st)
-  if st.help then
-    return {
-      {},
-      { { "  " }, { "?", "LedgerBuilderKey" }, { " close help   " }, { "q", "LedgerBuilderKey" }, { " close" } },
-    }
-  end
-  return {
-    {},
-    {
-      { "  " },
-      { "hjkl/↹", "LedgerBuilderKey" },
-      { " move   " },
-      { "D", "LedgerBuilderKey" },
-      { "/" },
-      { "M", "LedgerBuilderKey" },
-      { " platform   " },
-      { "+/-", "LedgerBuilderKey" },
-      { " logs   " },
-      { "?", "LedgerBuilderKey" },
-      { " help   " },
-      { "q", "LedgerBuilderKey" },
-      { " close" },
-    },
+    row("q / Esc", "close"),
   }
 end
 

@@ -78,6 +78,16 @@ function M.run(id, opts)
       rec.running = false
       rec.code = code
       rec.duration = os.time() - rec.started
+      if spec.kind == "build" or spec.kind == "test" then
+        pcall(function()
+          require("ledger.builder.history").record({
+            label = spec.label,
+            kind = spec.kind,
+            code = code,
+            duration = rec.duration,
+          })
+        end)
+      end
       vim.schedule(function()
         local lvl = code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR
         vim.notify(

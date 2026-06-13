@@ -166,8 +166,10 @@ describe("ledger.builder.ui.panes", function()
 
   local fake = {
     platform = "mobile",
+    platform_flag = "ios",
     config = "ios.sim.debug",
-    root = "/repo/ledger-live",
+    device = "nanoSP",
+    root = "/repo/LedgerHQ-ledger-live",
     tick = 3,
     focus = { col = "pipeline", idx = 2 },
     steps = {
@@ -194,18 +196,28 @@ describe("ledger.builder.ui.panes", function()
     is_lines(panes.header(fake))
     is_lines(panes.pipeline_content(fake))
     is_lines(panes.processes_content(fake))
-    is_lines(panes.logs_content(fake))
-    is_lines(panes.footer(fake))
+    is_lines(panes.logs_content(fake, 10))
+    is_lines(panes.stats_content(fake, 40))
+    is_lines(panes.wrong_folder_content())
+    is_lines(panes.cheatsheet())
   end)
 
-  it("pipeline shows one row per step plus action hint", function()
+  it("header shows iOS/Android subtabs only on mobile", function()
+    local mobile = panes.header(fake)
+    -- mobile header has tabs line + subtab line + meta + blank (>=4)
+    assert.is_true(#mobile >= 4)
+    local desktop = panes.header(vim.tbl_extend("force", {}, fake, { platform = "desktop" }))
+    assert.is_true(#desktop >= 3)
+  end)
+
+  it("pipeline shows one row per step", function()
     local lines = panes.pipeline_content(fake)
-    assert.is_true(#lines >= #fake.steps + 2)
+    assert.equals(#fake.steps, #lines)
   end)
 
   it("processes shows one row per process", function()
     local lines = panes.processes_content(fake)
-    assert.is_true(#lines >= #fake.procs + 1)
+    assert.equals(#fake.procs, #lines)
   end)
 
   it("box wraps content with a titled border of stable width", function()

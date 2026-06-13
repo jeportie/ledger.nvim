@@ -18,6 +18,11 @@ M.defaults = {
     keychain_service = "ledger-e2e-seed",
     env_var = "SEED",
   },
+  builder = {
+    transparent = false, -- opaque panel by default; true = see-through
+    animation = "max", -- "max" | "tasteful" | "minimal" | "off"
+    backdrop = true, -- dim the rest of the editor while open
+  },
 }
 
 M.opts = vim.deepcopy(M.defaults)

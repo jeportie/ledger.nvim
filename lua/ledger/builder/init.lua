@@ -1,71 +1,92 @@
 -- ledger.builder
 --
--- The Builder dashboard (LN-006). A volt float: desktop/mobile E2E pipeline
--- (mtime staleness), live process cards, log tail, background task execution,
--- 2D focus navigation (h/l columns, j/k/↑↓/Tab within, Enter to activate),
--- mouse clicks on every action, a `?` cheatsheet overlay, and a resizable LOGS
--- pane. (history / stats graphs / neotest handoff are a later increment.)
+-- The Builder dashboard (LN-006). A large, opaque volt float modelled on the
+-- typr stats screen:
+--   * Desktop / Mobile tabs (Mobile reveals iOS / Android subtabs) that change
+--     the whole pipeline / device / actions.
+--   * Two large panes side-by-side cycling a ring [Pipeline ▸ Processes ▸ Logs
+--     ▸ Stats] with Ctrl-t (right shifts to left, next appears right).
+--   * Background task execution, mouse clicks on every action, device/env
+--     dropdowns (nvzone/menu), a `?` cheatsheet overlay, and a wrong-folder
+--     guard when not inside a LedgerHQ-ledger-live checkout.
 
 local uv = vim.uv or vim.loop
 
 local M = {}
 
-local W = 96
 local SPIN_MS = 120
 local PROC_REFRESH_EVERY = 16 -- ticks (~2s) between process liveness polls
-local LOG_HEIGHTS = { 6, 14, 24 }
+local RING = { "pipeline", "processes", "logs", "stats" }
+local TITLES = { pipeline = "PIPELINE", processes = "PROCESSES", logs = "LOGS", stats = "STATS" }
+local DEVICES = { "nanoS", "nanoSP", "nanoX", "stax", "flex" }
+local CONFIGS = {
+  "ios.sim.debug",
+  "ios.sim.release",
+  "ios.sim.prerelease",
+  "android.emu.debug",
+  "android.emu.release",
+  "android.emu.prerelease",
+}
 
 local state = nil
 
-local function default_config()
-  local ok, detox = pcall(require, "ledger.detox")
-  if ok and detox.get_detox_config then
-    return detox.get_detox_config()
-  end
-  return "ios.sim.debug"
+local function cfg()
+  local ok, c = pcall(function()
+    return require("ledger.config").get().builder or {}
+  end)
+  return ok and c or {}
 end
 
-local function focus_len(col)
-  if not state then
-    return 0
-  end
-  if col == "processes" then
+local function default_config(flag)
+  return flag == "android" and "android.emu.release" or "ios.sim.debug"
+end
+
+-- ── ring / focus helpers ────────────────────────────────────────────────────
+
+local function left_view()
+  return RING[state.pane_i]
+end
+local function right_view()
+  return RING[(state.pane_i % #RING) + 1]
+end
+local function focused_view()
+  return state.side == "right" and right_view() or left_view()
+end
+
+local function view_len(view)
+  if view == "pipeline" then
+    return #(state.steps or {})
+  elseif view == "processes" then
     return #(state.procs or {})
   end
-  return #(state.steps or {})
+  return 0
 end
 
-local function clamp_focus()
-  local len = focus_len(state.focus.col)
+-- Push the resolved focus (view name + idx) onto state so panes can mark it.
+local function sync_focus()
+  local v = focused_view()
+  local len = view_len(v)
   if len == 0 then
-    state.focus.idx = 1
+    state.focus_idx = 1
   else
-    state.focus.idx = math.max(1, math.min(state.focus.idx, len))
+    state.focus_idx = math.max(1, math.min(state.focus_idx or 1, len))
   end
+  state.focus = { col = v, idx = state.focus_idx }
 end
 
-local function redraw(which)
-  if state and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
-    require("volt").redraw(state.buf, which or "all")
-  end
-end
+-- ── status / metadata refresh ───────────────────────────────────────────────
 
--- Recompute env/branch metadata (cheap-ish, on refresh / platform switch).
 local function refresh_meta()
+  state.device = state.device or os.getenv("SPECULOS_DEVICE") or "nanoSP"
   state.mock = os.getenv("MOCK") or "0"
-  state.device = os.getenv("SPECULOS_DEVICE") or "nanoSP"
-  state.branch = nil
-  if state.root then
-    local r = vim.system({ "git", "-C", state.root, "rev-parse", "--abbrev-ref", "HEAD" }, { text = true }):wait()
-    if r.code == 0 and r.stdout then
-      state.branch = r.stdout:gsub("%s+$", "")
-    end
-  end
 end
 
--- Full recompute: pipeline statuses + process liveness (shell).
 local function refresh_statuses()
   if not state then
+    return
+  end
+  if not state.root then
+    state.steps, state.procs, state.statuses = {}, {}, {}
     return
   end
   local pipeline = require("ledger.builder.pipeline")
@@ -80,12 +101,11 @@ local function refresh_statuses()
   for _, p in ipairs(state.procs) do
     alive[p.name] = p.alive
   end
-
   local ctx = {
     root = state.root,
     config = state.config,
-    detox_binary = function(cfg)
-      return detox.binary_paths[cfg]
+    detox_binary = function(c)
+      return detox.binary_paths[c]
     end,
     artifact_exists = function(path)
       return uv.fs_stat(path) ~= nil
@@ -97,7 +117,6 @@ local function refresh_statuses()
       return alive[name] or false
     end,
   }
-
   state.statuses = {}
   for _, step in ipairs(state.steps) do
     if step.template and tasks.is_running(step.template) then
@@ -106,12 +125,11 @@ local function refresh_statuses()
       state.statuses[step.id] = pipeline.status(step, ctx)
     end
   end
-  clamp_focus()
+  sync_focus()
 end
 
--- Light recompute: process liveness + running overlay (no find/staleness).
 local function refresh_runtime()
-  if not state then
+  if not state or not state.root then
     return
   end
   local proc = require("ledger.builder.proc")
@@ -124,6 +142,39 @@ local function refresh_runtime()
       state.statuses[step.id] = "ready"
     end
   end
+end
+
+-- ── layout ──────────────────────────────────────────────────────────────────
+
+local function pad_to(content, n)
+  local out = vim.deepcopy(content)
+  while #out < n do
+    out[#out + 1] = {}
+  end
+  return out
+end
+
+local function render_view(view, inner_w, height)
+  local panes = require("ledger.builder.ui.panes")
+  local content
+  if view == "pipeline" then
+    content = panes.pipeline_content(state)
+  elseif view == "processes" then
+    content = panes.processes_content(state)
+  elseif view == "logs" then
+    content = panes.logs_content(state, height)
+  else
+    content = panes.stats_content(state, inner_w)
+  end
+  return panes.box(TITLES[view], pad_to(content, height), inner_w)
+end
+
+local function divider(n)
+  local out = {}
+  for _ = 1, n do
+    out[#out + 1] = { { "│", "LedgerBuilderDim" } }
+  end
+  return out
 end
 
 local function sections()
@@ -139,65 +190,84 @@ local function sections()
     {
       name = "body",
       lines = function()
+        local pane_inner = state.pane_inner
+        local pane_h = state.pane_h
+        if not state.root then
+          return panes.box("BUILDER", pad_to(panes.wrong_folder_content(), pane_h), state.full_inner)
+        end
         if state.help then
-          return panes.box("HELP · cheatsheet", panes.cheatsheet(), 90)
+          return panes.box("HELP · cheatsheet", pad_to(panes.cheatsheet(), pane_h), state.full_inner)
         end
-        local left = panes.box("PIPELINE", panes.pipeline_content(state), 44)
-        local right = panes.box("PROCESSES", panes.processes_content(state), 42)
-        right[#right + 1] = {}
-        local logs = panes.box("LOGS", panes.logs_content(state, state.log_height), 42)
-        for _, l in ipairs(logs) do
-          right[#right + 1] = l
-        end
+        local left = render_view(left_view(), pane_inner, pane_h)
+        local right = render_view(right_view(), pane_inner, pane_h)
         return ui.grid_col({
-          { lines = left, w = 48, pad = 2 },
-          { lines = right, w = 46 },
+          { lines = left, w = pane_inner + 4, pad = 1 },
+          { lines = divider(#left), w = 1, pad = 1 },
+          { lines = right, w = pane_inner + 4 },
         })
       end,
     },
     {
-      name = "footer",
+      name = "indicator",
       lines = function()
-        return panes.footer(state)
+        if not state.root or state.help then
+          return { {} }
+        end
+        local dots = { {} }
+        local row = { { "  " } }
+        for i, v in ipairs(RING) do
+          local on = (i == state.pane_i) or (i == (state.pane_i % #RING) + 1)
+          row[#row + 1] = { (on and "●" or "○") .. " ", on and "LedgerStateRunning" or "LedgerBuilderDim" }
+          row[#row + 1] = { TITLES[v]:lower() .. "  ", on and "LedgerBuilderTitle" or "LedgerBuilderDim" }
+        end
+        dots[#dots + 1] = row
+        return dots
       end,
     },
   }
 end
 
--- Re-generate layout + buffer when section line-counts change (platform
--- switch, help toggle, log resize). volt locks heights at gen_data time.
+local function redraw(which)
+  if state and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+    require("volt").redraw(state.buf, which or "all")
+  end
+end
+
+local function compute_dims()
+  local W = math.min(vim.o.columns - 8, 180)
+  W = math.max(W, 80)
+  state.full_inner = W - 4
+  state.pane_inner = math.floor((W - 4) / 2) - 3
+  state.W = W
+  state.pane_h = math.max(10, math.floor(vim.o.lines * 0.85) - 9)
+end
+
+-- Rebuild layout + buffer when section line counts change (tabs/subtab/pane/
+-- help/platform). volt locks heights at gen_data time.
 local function rebuild()
   if not state or not vim.api.nvim_buf_is_valid(state.buf) then
     return
   end
   local volt = require("volt")
+  sync_focus()
   vim.bo[state.buf].modifiable = true
-  volt.gen_data({ { buf = state.buf, layout = sections(), xpad = 2, ns = state.ns } })
+  volt.gen_data({ { buf = state.buf, layout = sections(), xpad = 2, ns = state.vns } })
   local h = require("volt.state")[state.buf].h
-  volt.set_empty_lines(state.buf, h, W)
+  volt.set_empty_lines(state.buf, h, state.W)
   vim.bo[state.buf].modifiable = false
   if state.win and vim.api.nvim_win_is_valid(state.win) then
-    local height = math.max(8, math.min(h, math.floor(vim.o.lines * 0.92)))
-    pcall(vim.api.nvim_win_set_height, state.win, height)
+    pcall(vim.api.nvim_win_set_height, state.win, h)
+    pcall(vim.api.nvim_win_set_width, state.win, state.W + 4)
   end
   volt.redraw(state.buf, "all")
 end
 
--- ── actions (module-scope so both keymaps and mouse callbacks use them) ──────
-
-local function move(delta)
-  state.focus.idx = state.focus.idx + delta
-  clamp_focus()
-  redraw("body")
-end
-
-local function switch(col)
-  state.focus.col = col
-  clamp_focus()
-  redraw("body")
-end
+-- ── actions ──────────────────────────────────────────────────────────────────
 
 function M.run_template(template)
+  if not state.root then
+    return
+  end
   local tasks = require("ledger.tasks")
   local opts = {}
   if state.platform == "mobile" then
@@ -222,15 +292,17 @@ function M.run_step_by_id(id)
 end
 
 local function activate()
-  if state.focus.col == "pipeline" then
-    local step = (state.steps or {})[state.focus.idx]
+  if not state.root then
+    return
+  end
+  local v = focused_view()
+  if v == "pipeline" then
+    local step = (state.steps or {})[state.focus_idx]
     if step and step.template then
       M.run_template(step.template)
-    else
-      vim.notify("Builder: '" .. (step and step.label or "?") .. "' has no run action", vim.log.levels.WARN)
     end
-  else
-    local p = (state.procs or {})[state.focus.idx]
+  elseif v == "processes" then
+    local p = (state.procs or {})[state.focus_idx]
     if not p then
       return
     end
@@ -251,11 +323,10 @@ local function activate()
 end
 
 local function proc_action(kind)
-  if state.focus.col ~= "processes" then
-    vim.notify("Builder: " .. kind .. " acts on a process — switch with l/→", vim.log.levels.INFO)
+  if not state.root or focused_view() ~= "processes" then
     return
   end
-  local p = (state.procs or {})[state.focus.idx]
+  local p = (state.procs or {})[state.focus_idx]
   if not p then
     return
   end
@@ -274,11 +345,71 @@ local function proc_action(kind)
   end, 350)
 end
 
+local function cycle_pane(delta)
+  state.pane_i = ((state.pane_i - 1 + delta) % #RING) + 1
+  state.side = "left"
+  rebuild()
+end
+
 local function set_platform(p)
   state.platform = p
-  refresh_meta()
+  if p == "mobile" then
+    state.config = default_config(state.platform_flag)
+  end
   refresh_statuses()
-  rebuild() -- step count differs between platforms
+  rebuild()
+end
+
+local function set_subplatform(flag)
+  state.platform_flag = flag
+  state.platform = "mobile"
+  state.config = default_config(flag)
+  refresh_statuses()
+  rebuild()
+end
+
+local function open_menu(title, choices, current, on_pick)
+  local ok, menu = pcall(require, "menu")
+  if not ok then
+    vim.ui.select(choices, { prompt = title }, function(c)
+      if c then
+        on_pick(c)
+      end
+    end)
+    return
+  end
+  pcall(function()
+    require("menu.utils").delete_old_menus()
+  end)
+  local items = {}
+  for _, c in ipairs(choices) do
+    items[#items + 1] = {
+      name = "  " .. c,
+      rtxt = c == current and "●" or "",
+      cmd = function()
+        on_pick(c)
+      end,
+    }
+  end
+  menu.open(items, { mouse = true })
+end
+
+local function pick_device()
+  open_menu("Speculos device", DEVICES, state.device, function(d)
+    state.device = d
+    vim.env.SPECULOS_DEVICE = d
+    refresh_meta()
+    redraw("all")
+  end)
+end
+
+local function pick_env()
+  open_menu("Detox configuration", CONFIGS, state.config, function(c)
+    state.config = c
+    state.platform_flag = c:match("^android") and "android" or "ios"
+    refresh_statuses()
+    rebuild()
+  end)
 end
 
 local function toggle_help()
@@ -286,44 +417,7 @@ local function toggle_help()
   rebuild()
 end
 
-local function resize_logs(delta)
-  state.log_idx = math.max(1, math.min((state.log_idx or 1) + delta, #LOG_HEIGHTS))
-  state.log_height = LOG_HEIGHTS[state.log_idx]
-  rebuild()
-end
-
--- mouse / focus-aware callbacks injected into the panes via state
-local function install_callbacks()
-  state.on_platform = set_platform
-  state.on_step = function(i)
-    state.focus = { col = "pipeline", idx = i }
-    clamp_focus()
-    activate()
-  end
-  state.on_proc = function(i)
-    state.focus = { col = "processes", idx = i }
-    clamp_focus()
-    activate()
-  end
-  state.on_run = activate
-  state.on_build = function()
-    M.run_step_by_id("build")
-  end
-  state.on_refresh = function()
-    refresh_statuses()
-    redraw("all")
-  end
-  state.on_proc_toggle = function()
-    if state.focus.col == "processes" then
-      activate()
-    else
-      switch("processes")
-    end
-  end
-  state.on_kill = function()
-    proc_action("kill")
-  end
-end
+-- ── timers / animation ───────────────────────────────────────────────────────
 
 local function start_timer()
   state.timer = uv.new_timer()
@@ -353,11 +447,54 @@ local function stop_timer()
   end
 end
 
+-- ── mouse / focus callbacks injected into panes ──────────────────────────────
+
+local function install_callbacks()
+  state.on_platform = set_platform
+  state.on_subplatform = set_subplatform
+  state.on_device = pick_device
+  state.on_env = pick_env
+  state.on_step = function(i)
+    -- focus the pipeline pane wherever it currently is, then run
+    if left_view() == "pipeline" then
+      state.side = "left"
+    elseif right_view() == "pipeline" then
+      state.side = "right"
+    end
+    state.focus_idx = i
+    sync_focus()
+    activate()
+  end
+  state.on_proc = function(i)
+    if left_view() == "processes" then
+      state.side = "left"
+    elseif right_view() == "processes" then
+      state.side = "right"
+    end
+    state.focus_idx = i
+    sync_focus()
+    activate()
+  end
+end
+
+-- ── keymaps ───────────────────────────────────────────────────────────────────
+
 local function set_keymaps()
   local buf = state.buf
   local function map(lhs, fn)
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true })
   end
+  local function move(delta)
+    state.focus_idx = (state.focus_idx or 1) + delta
+    sync_focus()
+    redraw("body")
+  end
+  local function side(s)
+    state.side = s
+    sync_focus()
+    redraw("body")
+  end
+
   for _, k in ipairs({ "j", "<Down>", "<Tab>" }) do
     map(k, function()
       move(1)
@@ -370,14 +507,17 @@ local function set_keymaps()
   end
   for _, k in ipairs({ "l", "<Right>" }) do
     map(k, function()
-      switch("processes")
+      side("right")
     end)
   end
   for _, k in ipairs({ "h", "<Left>" }) do
     map(k, function()
-      switch("pipeline")
+      side("left")
     end)
   end
+  map("<C-t>", function()
+    cycle_pane(1)
+  end)
   map("<CR>", activate)
   map("x", function()
     proc_action("kill")
@@ -391,7 +531,6 @@ local function set_keymaps()
   map("R", function()
     refresh_statuses()
     redraw("all")
-    vim.notify("Builder: refreshed", vim.log.levels.INFO)
   end)
   map("D", function()
     set_platform("desktop")
@@ -399,19 +538,29 @@ local function set_keymaps()
   map("M", function()
     set_platform("mobile")
   end)
+  map("i", function()
+    if state.platform == "mobile" then
+      set_subplatform("ios")
+    end
+  end)
+  map("a", function()
+    if state.platform == "mobile" then
+      set_subplatform("android")
+    end
+  end)
+  map("e", function()
+    if state.platform == "mobile" then
+      pick_env()
+    else
+      pick_device()
+    end
+  end)
   map("?", toggle_help)
-  map("+", function()
-    resize_logs(1)
-  end)
-  map("=", function()
-    resize_logs(1)
-  end)
-  map("-", function()
-    resize_logs(-1)
-  end)
   map("q", M.close)
   map("<Esc>", M.close)
 end
+
+-- ── open / close ──────────────────────────────────────────────────────────────
 
 function M.open()
   if state and state.win and vim.api.nvim_win_is_valid(state.win) then
@@ -420,7 +569,8 @@ function M.open()
   end
 
   local volt = require("volt")
-  require("ledger.builder.ui.hl").setup()
+  local builder_cfg = cfg()
+  require("ledger.builder.ui.hl").setup({ transparent = builder_cfg.transparent })
 
   local root = nil
   local ok_tasks, tasks = pcall(require, "ledger.tasks")
@@ -431,43 +581,60 @@ function M.open()
   state = {
     platform = "desktop",
     platform_flag = "ios",
-    config = default_config(),
+    config = default_config("ios"),
     tick = 0,
     root = root,
     help = false,
-    log_idx = 1,
-    log_height = LOG_HEIGHTS[1],
-    focus = { col = "pipeline", idx = 1 },
+    pane_i = 1,
+    side = "left",
+    focus_idx = 1,
     buf = vim.api.nvim_create_buf(false, true),
-    ns = vim.api.nvim_create_namespace("ledger_builder"),
+    vns = vim.api.nvim_create_namespace("ledger_builder"),
     steps = {},
     statuses = {},
     procs = {},
   }
 
   install_callbacks()
+  compute_dims()
   refresh_meta()
   refresh_statuses()
 
-  volt.gen_data({ { buf = state.buf, layout = sections(), xpad = 2, ns = state.ns } })
+  volt.gen_data({ { buf = state.buf, layout = sections(), xpad = 2, ns = state.vns } })
   local h = require("volt.state")[state.buf].h
-  local height = math.max(8, math.min(h, math.floor(vim.o.lines * 0.92)))
-  local width = W + 4
+  local width = state.W + 4
   state.win = vim.api.nvim_open_win(state.buf, true, {
     relative = "editor",
     width = width,
-    height = height,
-    row = math.floor((vim.o.lines - height) / 2),
+    height = h,
+    row = math.floor((vim.o.lines - h) / 2),
     col = math.floor((vim.o.columns - width) / 2),
     style = "minimal",
     border = "rounded",
     title = " Ledger Builder ",
     title_pos = "center",
   })
-  vim.api.nvim_set_option_value("winhighlight", "Normal:Normal,FloatBorder:LedgerBuilderTitle", { win = state.win })
 
-  volt.run(state.buf, { h = h, w = W })
-  set_keymaps()
+  -- opaque, theme-tracking panel via a window-local highlight namespace
+  local hl = require("ledger.builder.ui.hl")
+  if hl.ns then
+    vim.api.nvim_win_set_hl_ns(state.win, hl.ns)
+  end
+  vim.wo[state.win].winhighlight =
+    "Normal:LedgerBuilderNormal,NormalFloat:LedgerBuilderNormal,FloatBorder:LedgerBuilderTitle"
+  if builder_cfg.transparent then
+    vim.wo[state.win].winblend = 0
+  end
+
+  volt.run(state.buf, { h = h, w = state.W })
+
+  -- MOUSE: register the buffer with volt's event system (this is what makes
+  -- the {text, hl, fn} segments clickable).
+  local volt_events = require("volt.events")
+  volt_events.add(state.buf)
+  volt_events.enable()
+
+  set_keymaps() -- after add() so our nav keys win over volt's defaults
 
   vim.api.nvim_create_autocmd("WinClosed", {
     buffer = state.buf,
