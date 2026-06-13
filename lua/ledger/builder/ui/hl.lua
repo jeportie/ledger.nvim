@@ -1,9 +1,9 @@
 -- ledger.builder.ui.hl
 --
--- Highlight groups for the Builder dashboard. We reuse volt's colorscheme-
--- derived accents (Ex* groups, loaded by volt.run) and add a few semantic
--- aliases so the panes read clearly. Defining them as links keeps them
--- tracking the active theme.
+-- Highlight groups for the Builder dashboard. Reuse volt's colorscheme-derived
+-- accents (Ex* groups, loaded by volt.run) so colours track the active theme:
+--   done   = green   running = blue   failed = red   stale = yellow
+--   pending/dim = comment grey      keys/accent = yellow / blue
 
 local M = {}
 
@@ -15,7 +15,7 @@ M.groups = {
   LedgerBuilderOff = { link = "Comment" },
   -- step / process states
   LedgerStateDone = { link = "ExGreen" },
-  LedgerStateRunning = { link = "ExYellow" },
+  LedgerStateRunning = { link = "ExBlue" },
   LedgerStatePending = { link = "Comment" },
   LedgerStateStale = { link = "ExYellow" },
   LedgerStateFailed = { link = "ExRed" },
@@ -23,11 +23,7 @@ M.groups = {
 
 function M.setup()
   for name, def in pairs(M.groups) do
-    -- only set if missing so user overrides win
-    if vim.fn.hlexists(name) == 0 or true then
-      def = vim.tbl_extend("force", { default = true }, def)
-      pcall(vim.api.nvim_set_hl, 0, name, def)
-    end
+    pcall(vim.api.nvim_set_hl, 0, name, vim.tbl_extend("force", { default = true }, def))
   end
 end
 

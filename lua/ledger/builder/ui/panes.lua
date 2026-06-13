@@ -1,8 +1,9 @@
 -- ledger.builder.ui.panes
 --
 -- Pure-ish renderers: each returns a list of volt lines (a line is a list of
--- { text, hlgroup } segments). The controller (builder.init) owns state and
--- composes these into volt sections. Focus is 2D: state.focus = {col, idx}.
+-- { text, hlgroup, action? } segments — a 3rd element makes the segment
+-- mouse-clickable / <CR>-activatable via volt). The controller (builder.init)
+-- owns state and supplies on_* callbacks. Focus is 2D: state.focus = {col, idx}.
 
 local M = {}
 
@@ -41,7 +42,6 @@ local function focus_gutter(focused)
 end
 
 -- Titled bordered box around `content` lines, fixed inner width `inner_w`.
--- (volt.ui.border has no title support, so we build it here.)
 function M.box(title, content, inner_w, hl)
   hl = hl or "LedgerBuilderDim"
   local ui = require("volt.ui")
@@ -64,14 +64,30 @@ function M.box(title, content, inner_w, hl)
   return out
 end
 
--- Header: title + platform toggle + repo/config.
+-- Header: title + platform toggle + repo/branch + mock/device.
 function M.header(st)
   local function tog(p, label)
     local on = st.platform == p
-    return { (on and "● " or "○ ") .. label, on and "LedgerBuilderOn" or "LedgerBuilderOff" }
+    local seg = { (on and "● " or "○ ") .. label, on and "LedgerBuilderOn" or "LedgerBuilderOff" }
+    if st.on_platform then
+      seg[3] = function()
+        st.on_platform(p)
+      end
+    end
+    return seg
   end
   local repo = st.root and ("repo: " .. vim.fn.fnamemodify(st.root, ":t")) or "no ledger-live repo (set monorepo_root)"
-  local env = st.platform == "mobile" and ("  " .. st.config) or ""
+  local branch = st.branch and ("  @" .. st.branch) or ""
+  local meta = {
+    { "  " },
+    { "MOCK=" .. (st.mock or "0"), "LedgerBuilderDim" },
+    { "   " },
+    { st.device or "nanoSP", "LedgerBuilderDim" },
+  }
+  if st.platform == "mobile" then
+    meta[#meta + 1] = { "   " }
+    meta[#meta + 1] = { st.config, "LedgerBuilderKey" }
+  end
   return {
     { { "  Ledger Builder", "LedgerBuilderTitle" } },
     {
@@ -81,8 +97,9 @@ function M.header(st)
       tog("mobile", "Mobile"),
       { "      " },
       { repo, "LedgerBuilderDim" },
-      { env, "LedgerBuilderKey" },
+      { branch, "LedgerBuilderDim" },
     },
+    meta,
     {},
   }
 end
@@ -95,11 +112,17 @@ function M.pipeline_content(st)
     local state = (st.statuses or {})[step.id] or "pending"
     local g, hl = glyph(state, st.tick or 0)
     local focused = st.focus and st.focus.col == "pipeline" and st.focus.idx == i
+    local label_seg = { " " .. step.label, focused and "LedgerBuilderTitle" or "Normal" }
+    if st.on_step then
+      label_seg[3] = function()
+        st.on_step(i)
+      end
+    end
     local row = {
       focus_gutter(focused),
       { tostring(i) .. " ", "LedgerBuilderDim" },
       { g, hl },
-      { " " .. step.label },
+      label_seg,
     }
     if state == "stale" then
       row[#row + 1] = { "  stale", "LedgerStateStale" }
@@ -115,13 +138,16 @@ function M.pipeline_content(st)
     lines[#lines + 1] = row
   end
   lines[#lines + 1] = {}
+  local function btn(text, hl, cb)
+    return cb and { text, hl, cb } or { text, hl }
+  end
   lines[#lines + 1] = {
     { "  " },
-    { "⏎", "LedgerBuilderKey" },
+    btn("⏎", "LedgerBuilderKey", st.on_run),
     { " run  " },
-    { "B", "LedgerBuilderKey" },
+    btn("B", "LedgerBuilderKey", st.on_build),
     { " build  " },
-    { "R", "LedgerBuilderKey" },
+    btn("R", "LedgerBuilderKey", st.on_refresh),
     { " refresh" },
   }
   return lines
@@ -132,11 +158,15 @@ function M.processes_content(st)
   local lines = {}
   for i, p in ipairs(st.procs or {}) do
     local focused = st.focus and st.focus.col == "processes" and st.focus.idx == i
-    local row = {
-      focus_gutter(focused),
-      { p.alive and "●" or "○", p.alive and "LedgerStateDone" or "LedgerStatePending" },
-      { " " .. p.label },
-    }
+    local dot = { p.alive and "●" or "○", p.alive and "LedgerStateDone" or "LedgerStatePending" }
+    local label_seg = { " " .. p.label, focused and "LedgerBuilderTitle" or "Normal" }
+    if st.on_proc then
+      label_seg[3] = function()
+        st.on_proc(i)
+      end
+      dot[3] = label_seg[3]
+    end
+    local row = { focus_gutter(focused), dot, label_seg }
     if p.port then
       row[#row + 1] = { "  :" .. p.port, "LedgerBuilderDim" }
     end
@@ -149,18 +179,22 @@ function M.processes_content(st)
     lines[#lines + 1] = row
   end
   lines[#lines + 1] = {}
+  local function btn(text, hl, cb)
+    return cb and { text, hl, cb } or { text, hl }
+  end
   lines[#lines + 1] = {
     { "  " },
-    { "⏎", "LedgerBuilderKey" },
+    btn("⏎", "LedgerBuilderKey", st.on_proc_toggle),
     { " start/stop  " },
-    { "x", "LedgerBuilderKey" },
+    btn("x", "LedgerBuilderKey", st.on_kill),
     { " kill" },
   }
   return lines
 end
 
 -- Logs column content: tail of the focused step's task (or last started).
-function M.logs_content(st)
+-- `height` controls how many lines are shown.
+function M.logs_content(st, height)
   local tasks = require("ledger.tasks")
   local id
   if st.focus and st.focus.col == "pipeline" then
@@ -168,25 +202,72 @@ function M.logs_content(st)
     id = step and step.template or nil
   end
   id = id or tasks.last_started
-  local tail = id and tasks.log_tail(id, 6) or {}
+  local tail = id and tasks.log_tail(id, height or 6) or {}
   if #tail == 0 then
     return { { { "  (no output yet — run a step)", "LedgerBuilderDim" } } }
   end
   local lines = {}
   for _, l in ipairs(tail) do
-    -- trim to keep within the box; colour error-ish lines
     local txt = l:gsub("\t", "  ")
     if #txt > 40 then
       txt = txt:sub(1, 39) .. "…"
     end
-    local hl = txt:match("[Ee]rror") and "LedgerStateFailed" or "LedgerBuilderDim"
+    local hl = "LedgerBuilderDim"
+    if txt:match("[Ee]rror") or txt:match("✗") then
+      hl = "LedgerStateFailed"
+    elseif txt:match("✓") or txt:match("[Dd]one") then
+      hl = "LedgerStateDone"
+    end
     lines[#lines + 1] = { { "  " .. txt, hl } }
   end
   return lines
 end
 
+-- Cheatsheet content: every action, the key, what it does, and the command /
+-- purpose. Rendered (boxed) by the controller when `?` is toggled.
+function M.cheatsheet()
+  local function row(key, desc, detail)
+    return {
+      { "  " },
+      { key, "LedgerBuilderKey" },
+      { string.rep(" ", math.max(1, 10 - #key)) },
+      { desc },
+      { detail and ("   " .. detail) or "", "LedgerBuilderDim" },
+    }
+  end
+  return {
+    { { "  Navigation", "LedgerBuilderTitle" } },
+    row("h / ←", "focus the pipeline column"),
+    row("l / →", "focus the processes column"),
+    row("j k ↑↓ ⇥", "move within a column"),
+    row("mouse", "click any step / process / button"),
+    {},
+    { { "  Pipeline", "LedgerBuilderTitle" } },
+    row("⏎", "run the focused step", "→ pnpm task (background)"),
+    row("B", "build", "→ desktop build:testing / detox build"),
+    row("R", "refresh", "recompute staleness + process liveness"),
+    {},
+    { { "  Processes", "LedgerBuilderTitle" } },
+    row("⏎", "start / stop the focused process"),
+    row("x", "kill the focused process", "lsof kill / docker rm -f"),
+    row("s", "start the focused process", "Metro / dev:lld templates"),
+    {},
+    { { "  View", "LedgerBuilderTitle" } },
+    row("D / M", "switch desktop / mobile platform"),
+    row("+ / -", "grow / shrink the LOGS pane"),
+    row("?", "toggle this help"),
+    row("q / Esc", "close the dashboard"),
+  }
+end
+
 -- Footer: nav + action hints.
 function M.footer(st)
+  if st.help then
+    return {
+      {},
+      { { "  " }, { "?", "LedgerBuilderKey" }, { " close help   " }, { "q", "LedgerBuilderKey" }, { " close" } },
+    }
+  end
   return {
     {},
     {
@@ -197,8 +278,10 @@ function M.footer(st)
       { "/" },
       { "M", "LedgerBuilderKey" },
       { " platform   " },
-      { "R", "LedgerBuilderKey" },
-      { " refresh   " },
+      { "+/-", "LedgerBuilderKey" },
+      { " logs   " },
+      { "?", "LedgerBuilderKey" },
+      { " help   " },
       { "q", "LedgerBuilderKey" },
       { " close" },
     },
