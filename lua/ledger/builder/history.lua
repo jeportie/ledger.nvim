@@ -50,6 +50,7 @@ function M.record(entry)
     kind = entry.kind or "task",
     code = entry.code,
     duration = entry.duration,
+    platform = entry.platform, -- "desktop" | "ios" | "android" | nil
   }
   list[#list + 1] = e
   while #list > MAX do
@@ -59,12 +60,13 @@ function M.record(entry)
   return e
 end
 
--- Most recent `n` entries, newest last (chronological), optionally filtered by kind.
-function M.recent(n, kind)
+-- Most recent `n` entries, newest last (chronological), optionally filtered by
+-- kind and/or platform.
+function M.recent(n, kind, platform)
   local list = load()
   local filtered = {}
   for _, e in ipairs(list) do
-    if not kind or e.kind == kind then
+    if (not kind or e.kind == kind) and (not platform or e.platform == platform) then
       filtered[#filtered + 1] = e
     end
   end
@@ -78,8 +80,8 @@ function M.recent(n, kind)
 end
 
 -- Pass rate (0-100) over the last `n` test runs, or nil if none.
-function M.pass_rate(n)
-  local tests = M.recent(n or 50, "test")
+function M.pass_rate(n, platform)
+  local tests = M.recent(n or 50, "test", platform)
   if #tests == 0 then
     return nil
   end
@@ -93,9 +95,9 @@ function M.pass_rate(n)
 end
 
 -- Recent build durations (seconds), oldest→newest.
-function M.build_durations(n)
+function M.build_durations(n, platform)
   local out = {}
-  for _, e in ipairs(M.recent(n or 12, "build")) do
+  for _, e in ipairs(M.recent(n or 12, "build", platform)) do
     out[#out + 1] = e.duration or 0
   end
   return out

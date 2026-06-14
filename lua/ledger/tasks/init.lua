@@ -37,8 +37,10 @@ local function fmt_label(spec)
 end
 
 -- Run a template by id with opts, in the background. Returns true on launch.
+-- `opts.root` overrides root detection (the Builder passes its cwd-detected root).
 function M.run(id, opts)
-  local root = M.resolve_root()
+  opts = opts or {}
+  local root = opts.root or M.resolve_root()
   if not root then
     vim.notify(
       "ledger.tasks: not inside a ledger-live repo.\n"
@@ -79,12 +81,17 @@ function M.run(id, opts)
       rec.code = code
       rec.duration = os.time() - rec.started
       if spec.kind == "build" or spec.kind == "test" then
+        local plat = "desktop"
+        if spec.platform ~= "desktop" then
+          plat = (opts.config and opts.config:match("^android")) and "android" or "ios"
+        end
         pcall(function()
           require("ledger.builder.history").record({
             label = spec.label,
             kind = spec.kind,
             code = code,
             duration = rec.duration,
+            platform = plat,
           })
         end)
       end

@@ -199,8 +199,20 @@ describe("ledger.builder.ui.panes", function()
     is_lines(panes.processes_content(fake))
     is_lines(panes.logs_content(fake, 10))
     is_lines(panes.stats_content(fake, 40))
-    is_lines(panes.wrong_folder_content())
+    is_lines(panes.wrong_folder_content("/home/u"))
     is_lines(panes.cheatsheet())
+  end)
+
+  it("wrong-folder banner shows the cwd path", function()
+    local lines = panes.wrong_folder_content("/Users/x/projects")
+    local joined = ""
+    for _, line in ipairs(lines) do
+      for _, seg in ipairs(line) do
+        joined = joined .. (seg[1] or "")
+      end
+    end
+    assert.is_truthy(joined:find("/Users/x/projects", 1, true))
+    assert.is_truthy(joined:find("not inside", 1, true))
   end)
 
   it("header shows iOS/Android subtabs only on mobile", function()

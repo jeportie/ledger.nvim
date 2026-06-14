@@ -234,14 +234,18 @@ function M.logs_content(st, height)
   return lines
 end
 
--- Stats: HISTORY table + BUILD-TIME bar graph + PASS-RATE bar.
+-- Stats: HISTORY table + BUILD-TIME bar graph + PASS-RATE bar, filtered to the
+-- active target (desktop / ios / android).
 function M.stats_content(st, inner_w)
   local history = require("ledger.builder.history")
   local ui = require("volt.ui")
   local lines = {}
+  local target = st.platform == "desktop" and "desktop" or st.platform_flag
+
+  lines[#lines + 1] = { { "  target: ", "LedgerBuilderDim" }, { target, "LedgerBuilderTitle" } }
 
   -- HISTORY (last 8, newest last)
-  local recent = history.recent(8)
+  local recent = history.recent(8, nil, target)
   local tb = { { "time", "task", "dur", "ok" } }
   for _, e in ipairs(recent) do
     tb[#tb + 1] = {
@@ -261,7 +265,7 @@ function M.stats_content(st, inner_w)
   lines[#lines + 1] = {}
 
   -- BUILD TIME bar graph (recent build durations, normalised to 0-100)
-  local durs = history.build_durations(12)
+  local durs = history.build_durations(12, target)
   if #durs > 0 then
     local maxd = 1
     for _, d in ipairs(durs) do
@@ -300,7 +304,7 @@ function M.stats_content(st, inner_w)
   lines[#lines + 1] = {}
 
   -- PASS RATE bar
-  local rate, n = history.pass_rate(50)
+  local rate, n = history.pass_rate(50, target)
   if rate then
     local bar = ui.progressbar({
       w = math.max(10, inner_w - 18),
@@ -318,15 +322,16 @@ function M.stats_content(st, inner_w)
   return lines
 end
 
--- Wrong-folder banner (not inside a LedgerHQ-ledger-live checkout).
-function M.wrong_folder_content()
+-- Wrong-folder banner (cwd is not inside a LedgerHQ-ledger-live checkout).
+function M.wrong_folder_content(cwd)
   return {
     {},
-    { { "  ⚠ not inside a LedgerHQ-ledger-live checkout", "LedgerStateFailed" } },
+    { { "  ⚠ not inside a LedgerHQ-ledger-live repo", "LedgerStateFailed" } },
+    {},
+    { { "  cwd: ", "LedgerBuilderDim" }, { cwd or "?", "LedgerStateFailed" } },
     {},
     { { "  Builder actions are disabled.", "LedgerBuilderDim" } },
-    { { "  cd into the monorepo, or set ", "LedgerBuilderDim" }, { "monorepo_root", "LedgerBuilderKey" } },
-    { { "  in require('ledger').setup{}.", "LedgerBuilderDim" } },
+    { { "  cd into a ledger-live checkout and reopen.", "LedgerBuilderDim" } },
   }
 end
 

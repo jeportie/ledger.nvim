@@ -188,7 +188,7 @@ local function sections()
         local pane_inner = state.pane_inner
         local pane_h = state.pane_h
         if not state.root then
-          return panes.box("BUILDER", pad_to(panes.wrong_folder_content(), pane_h), state.full_inner)
+          return panes.box("BUILDER", pad_to(panes.wrong_folder_content(state.cwd), pane_h), state.full_inner)
         end
         if state.help then
           return panes.box("HELP · cheatsheet", pad_to(panes.cheatsheet(), pane_h), state.full_inner)
@@ -276,7 +276,7 @@ function M.run_template(template)
     return
   end
   local tasks = require("ledger.tasks")
-  local opts = {}
+  local opts = { root = state.root }
   if state.platform == "mobile" then
     opts.config = state.config
     opts.platform_flag = state.platform_flag
@@ -319,7 +319,7 @@ local function activate()
     if p.alive then
       proc.stop(p.name)
     else
-      local ok, err = proc.start(p.name)
+      local ok, err = proc.start(p.name, { root = state.root })
       if not ok then
         vim.notify("Builder: " .. tostring(err), vim.log.levels.WARN)
       end
@@ -400,7 +400,9 @@ local function open_menu(title, choices, current, on_pick)
       end,
     }
   end
-  menu.open(items, { mouse = true })
+  -- mouse=false → the menu window is focused and navigable (j/k/arrows, Enter)
+  -- and q/Esc closes it.
+  menu.open(items, { mouse = false })
 end
 
 local function pick_device()
@@ -445,7 +447,7 @@ local function do_run_test(scope_opts)
   end
   local tasks = require("ledger.tasks")
   local id = state.platform == "desktop" and "desktop.pw.run" or "mobile.detox.test"
-  local opts = vim.tbl_extend("force", {}, scope_opts or {})
+  local opts = vim.tbl_extend("force", { root = state.root }, scope_opts or {})
   if state.platform == "desktop" then
     opts.pwdebug = state.pwdebug == "1"
   else
@@ -485,20 +487,35 @@ end
 
 local function pick_test_name()
   local dir = specs_root()
-  local names = {}
-  local ok, res = pcall(function()
-    return vim.system({ "rg", "--no-filename", "--no-line-number", "-o", "B2CQA-\\d+", dir }, { text = true }):wait()
-  end)
-  if ok and res and res.code == 0 and res.stdout then
-    local seen = {}
-    for tok in res.stdout:gmatch("B2CQA%-%d+") do
-      if not seen[tok] then
-        seen[tok] = true
-        names[#names + 1] = tok
-      end
+  local names, seen = {}, {}
+  local function add(tok)
+    tok = tok and tok:gsub("%s+$", "") or ""
+    if tok ~= "" and not seen[tok] then
+      seen[tok] = true
+      names[#names + 1] = tok
     end
-    table.sort(names)
   end
+  local function rg(args, gather)
+    local ok, res = pcall(function()
+      return vim.system(args, { text = true }):wait()
+    end)
+    if ok and res and res.code == 0 and res.stdout then
+      gather(res.stdout)
+    end
+  end
+  -- B2CQA tickets
+  rg({ "rg", "--no-filename", "-o", "B2CQA-\\d+", dir }, function(out)
+    for tok in out:gmatch("B2CQA%-%d+") do
+      add(tok)
+    end
+  end)
+  -- it("…") / test("…") titles (Playwright + Detox), captured via -r '$1'
+  rg({ "rg", "--no-filename", "-o", "-r", "$1", [[(?:it|test)\(['"`]([^'"`]+)]], dir }, function(out)
+    for line in out:gmatch("[^\r\n]+") do
+      add(line)
+    end
+  end)
+  table.sort(names)
   names[#names + 1] = "✎ type a name / grep…"
   vim.ui.select(names, { prompt = "Test name / ticket" }, function(sel)
     if not sel then
@@ -716,11 +733,12 @@ function M.open()
   local builder_cfg = cfg()
   require("ledger.builder.ui.hl").setup({ transparent = builder_cfg.transparent })
 
-  local root = nil
-  local ok_tasks, tasks = pcall(require, "ledger.tasks")
-  if ok_tasks and tasks.resolve_root then
-    root = tasks.resolve_root()
-  end
+  -- Detect from the CURRENT working dir only (no monorepo_root fallback): if
+  -- you're not inside a ledger-live checkout, the Builder must say so.
+  local detox = require("ledger.detox")
+  local cwd = (vim.uv or vim.loop).cwd()
+  local detected = detox.get_repo_root()
+  local root = detox.is_ledger_root(detected) and detected or nil
 
   state = {
     platform = "desktop",
@@ -729,6 +747,7 @@ function M.open()
     pwdebug = "0",
     tick = 0,
     root = root,
+    cwd = cwd,
     help = false,
     pane_i = 1,
     side = "left",
