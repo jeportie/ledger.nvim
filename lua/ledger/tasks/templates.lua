@@ -30,35 +30,43 @@ local function detox_build_cmd(opts)
   return prefix .. "pnpm mobile e2e:build -c " .. cfg
 end
 
--- Detox test command (root alias `pnpm e2e:mobile <script>`, run from repo
--- root; pnpm executes the script inside the e2e/mobile workspace). Named
--- wrappers when available, otherwise the generic `test:detox -- -c <config>`.
+-- Map a detox configuration to its e2e:mobile script (iOS debug needs Metro;
+-- iOS/Android release embed the bundle; Android debug is broken locally).
+local DETOX_SCRIPT = {
+  ["ios.sim.debug"] = "test:ios:debug",
+  ["ios.sim.release"] = "test:ios",
+  ["android.emu.release"] = "test:android",
+}
+
+-- Detox test command. `opts.config` picks the script; `opts.scope` ("all" |
+-- "file" | "name") + `opts.spec` / `opts.name` build the Jest filter.
 local function detox_test_cmd(opts)
   local cfg = opts.config or "ios.sim.debug"
-  local wrappers = {
-    ["ios.sim.debug"] = "pnpm e2e:mobile test:ios:debug",
-    ["ios.sim.release"] = "pnpm e2e:mobile test:ios",
-    ["android.emu.release"] = "pnpm e2e:mobile test:android",
-  }
-  local base = wrappers[cfg] or ("pnpm e2e:mobile test:detox -- -c " .. cfg)
-  if opts.spec and opts.spec ~= "" then
-    return base .. " " .. opts.spec
+  local script = DETOX_SCRIPT[cfg]
+  local base = script and ("pnpm e2e:mobile " .. script) or ("pnpm e2e:mobile test:detox -- -c " .. cfg)
+  local scope = opts.scope or "all"
+  if script then
+    if scope == "file" and opts.spec and opts.spec ~= "" then
+      base = base .. " -- --testPathPattern " .. opts.spec
+    elseif scope == "name" and opts.name and opts.name ~= "" then
+      base = base .. ' -- -t "' .. opts.name .. '"'
+    end
   end
   return base
 end
 
--- Playwright run command (root alias `pnpm e2e:desktop test:playwright`, run
--- from repo root; pnpm executes it inside the e2e/desktop workspace).
+-- Playwright test command. `opts.scope` ("all" | "file" | "name") + `opts.spec`
+-- / `opts.name`; `opts.pwdebug` prefixes `PWDEBUG=1` to open the Inspector.
 local function pw_run_cmd(opts)
   local base = "pnpm e2e:desktop test:playwright"
-  if opts.spec and opts.spec ~= "" then
-    return base .. " " .. opts.spec
+  local scope = opts.scope or "all"
+  if scope == "file" and opts.spec and opts.spec ~= "" then
+    base = base .. " " .. opts.spec
+  elseif scope == "name" and opts.name and opts.name ~= "" then
+    base = base .. ' --grep "' .. opts.name .. '"'
   end
-  if opts.grep and opts.grep ~= "" then
-    return base .. ' --grep "' .. opts.grep .. '"'
-  end
-  if opts.shard and opts.shard ~= "" then
-    return base .. " --shard=" .. opts.shard
+  if opts.pwdebug then
+    base = "PWDEBUG=1 " .. base
   end
   return base
 end
@@ -256,6 +264,32 @@ M.templates = {
     kind = "util",
     cwd = "repo",
     cmd = "adb reverse tcp:8081 tcp:8081 && adb reverse tcp:8099 tcp:8099",
+  },
+
+  -- ── clean / fixes ──────────────────────────────────────────────────────────
+  {
+    id = "shared.clean",
+    label = "Clean (git clean -fdX)",
+    platform = "shared",
+    kind = "clean",
+    cwd = "repo",
+    cmd = "pnpm clean",
+  },
+  {
+    id = "fix.global",
+    label = "Fix · reinstall (node_modules + store)",
+    platform = "shared",
+    kind = "fix",
+    cwd = "repo",
+    cmd = "rm -rf node_modules && pnpm store prune && pnpm i",
+  },
+  {
+    id = "fix.ios_pod",
+    label = "Fix · iOS pods (reset Pods + reinstall)",
+    platform = "mobile",
+    kind = "fix",
+    cwd = "repo",
+    cmd = "cd apps/ledger-live-mobile/ios && rm -rf Pods Podfile.lock && cd ../../.. && pnpm mobile pod",
   },
 }
 

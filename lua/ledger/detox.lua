@@ -84,12 +84,20 @@ function M.get_e2e_mobile_root()
   return M.get_e2e_subdir("mobile")
 end
 
--- True if `root` looks like the ledger-live monorepo (has one of the apps).
+-- True if `root` looks like the ledger-live monorepo: either it contains one
+-- of the apps, or its directory name matches the LedgerHQ-ledger-live checkout
+-- (covers sparse checkouts / worktrees named like the repo).
 function M.is_ledger_root(root)
   if not root or root == "" then
     return false
   end
-  return uv.fs_stat(root .. "/apps/ledger-live-desktop") ~= nil or uv.fs_stat(root .. "/apps/ledger-live-mobile") ~= nil
+  if
+    uv.fs_stat(root .. "/apps/ledger-live-desktop") ~= nil or uv.fs_stat(root .. "/apps/ledger-live-mobile") ~= nil
+  then
+    return true
+  end
+  local name = root:match("([^/]+)/?$") or ""
+  return name:match("LedgerHQ%-ledger%-live") ~= nil
 end
 
 function M.get_repo_root()
@@ -103,7 +111,13 @@ function M.get_repo_root()
   end
   local dir = cwd
   while dir and dir ~= "/" do
-    if uv.fs_stat(dir .. "/e2e/mobile") then
+    local name = dir:match("([^/]+)$") or ""
+    if
+      uv.fs_stat(dir .. "/e2e/mobile")
+      or uv.fs_stat(dir .. "/apps/ledger-live-mobile")
+      or uv.fs_stat(dir .. "/apps/ledger-live-desktop")
+      or name:match("LedgerHQ%-ledger%-live")
+    then
       return dir
     end
     dir = dir:match("(.+)/[^/]+$")

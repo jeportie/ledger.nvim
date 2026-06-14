@@ -18,6 +18,11 @@ M.defaults = {
     keychain_service = "ledger-e2e-seed",
     env_var = "SEED",
   },
+  builder = {
+    transparent = false, -- opaque panel by default; true = see-through
+    animation = "max", -- "max" | "tasteful" | "minimal" | "off"
+    backdrop = true, -- dim the rest of the editor while open
+  },
 }
 
 M.opts = vim.deepcopy(M.defaults)
@@ -53,6 +58,12 @@ function M.setup(opts)
   local ok_tasks, tasks = pcall(require, "ledger.tasks")
   if ok_tasks and tasks.register_commands then
     tasks.register_commands()
+  end
+
+  -- Builder dashboard: :LedgerBuilder
+  local ok_builder, builder = pcall(require, "ledger.builder")
+  if ok_builder and builder.register_commands then
+    builder.register_commands()
   end
 end
 

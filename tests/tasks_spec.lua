@@ -45,18 +45,30 @@ describe("ledger.tasks.templates", function()
       )
     end)
 
-    it("detox test maps known configs to wrappers and appends spec", function()
+    it("detox test maps configs to scripts and applies scope", function()
       assert.equals(
         "pnpm e2e:mobile test:ios:debug",
-        templates.resolve("mobile.detox.test", { config = "ios.sim.debug" }, ROOT).cmd
+        templates.resolve("mobile.detox.test", { config = "ios.sim.debug", scope = "all" }, ROOT).cmd
       )
       assert.equals(
         "pnpm e2e:mobile test:android",
-        templates.resolve("mobile.detox.test", { config = "android.emu.release" }, ROOT).cmd
+        templates.resolve("mobile.detox.test", { config = "android.emu.release", scope = "all" }, ROOT).cmd
       )
       assert.equals(
-        "pnpm e2e:mobile test:ios:debug send.spec.ts",
-        templates.resolve("mobile.detox.test", { config = "ios.sim.debug", spec = "send.spec.ts" }, ROOT).cmd
+        "pnpm e2e:mobile test:ios:debug -- --testPathPattern specs/swap/x.spec.ts",
+        templates.resolve(
+          "mobile.detox.test",
+          { config = "ios.sim.debug", scope = "file", spec = "specs/swap/x.spec.ts" },
+          ROOT
+        ).cmd
+      )
+      assert.equals(
+        'pnpm e2e:mobile test:android -- -t "B2CQA-604"',
+        templates.resolve(
+          "mobile.detox.test",
+          { config = "android.emu.release", scope = "name", name = "B2CQA-604" },
+          ROOT
+        ).cmd
       )
     end)
 
@@ -67,20 +79,26 @@ describe("ledger.tasks.templates", function()
       )
     end)
 
-    it("playwright run supports spec / grep / shard", function()
+    it("playwright run supports scope + PWDEBUG", function()
       assert.equals("pnpm e2e:desktop test:playwright", templates.resolve("desktop.pw.run", {}, ROOT).cmd)
       assert.equals(
         "pnpm e2e:desktop test:playwright settings.spec.ts",
-        templates.resolve("desktop.pw.run", { spec = "settings.spec.ts" }, ROOT).cmd
+        templates.resolve("desktop.pw.run", { scope = "file", spec = "settings.spec.ts" }, ROOT).cmd
       )
       assert.equals(
         'pnpm e2e:desktop test:playwright --grep "@NanoSP"',
-        templates.resolve("desktop.pw.run", { grep = "@NanoSP" }, ROOT).cmd
+        templates.resolve("desktop.pw.run", { scope = "name", name = "@NanoSP" }, ROOT).cmd
       )
       assert.equals(
-        "pnpm e2e:desktop test:playwright --shard=1/4",
-        templates.resolve("desktop.pw.run", { shard = "1/4" }, ROOT).cmd
+        "PWDEBUG=1 pnpm e2e:desktop test:playwright",
+        templates.resolve("desktop.pw.run", { pwdebug = true }, ROOT).cmd
       )
+    end)
+
+    it("clean / fix templates", function()
+      assert.equals("pnpm clean", templates.resolve("shared.clean", {}, ROOT).cmd)
+      assert.equals("rm -rf node_modules && pnpm store prune && pnpm i", templates.resolve("fix.global", {}, ROOT).cmd)
+      assert.is_truthy(templates.resolve("fix.ios_pod", {}, ROOT).cmd:find("pnpm mobile pod", 1, true))
     end)
 
     it("lib watch defaults and overrides the package", function()
