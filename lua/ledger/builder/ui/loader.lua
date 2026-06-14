@@ -8,8 +8,6 @@
 local api = vim.api
 local M = {}
 
-local frames = { "⢎ ", "⠎⠁", "⠊⠑", "⠈⠱", " ⡱", "⢀⡰", "⢄⡠", "⢆⡀" }
-
 local st = { buf = nil, win = nil, timer = nil, index = 1 }
 
 -- Open the loader. Returns immediately; call M.close() when ready.
@@ -20,9 +18,19 @@ function M.open(text)
   text = text or "Loading Ledger Builder"
   local cfg = require("ledger.config").get().builder or {}
   local border = cfg.border and "single" or "none"
+  local pattern = require("ledger.builder.ui.spin").get(cfg.spinner and cfg.spinner.loader)
+  local frames = pattern.frames
+  local interval = pattern.interval or 80
+
+  -- widest frame so a multi-cell pattern (e.g. material) never overflows
+  local maxfw = 1
+  for _, f in ipairs(frames) do
+    maxfw = math.max(maxfw, vim.fn.strdisplaywidth(f))
+  end
 
   local pad = 2
-  local w = #text + 4 + pad * 2
+  local tw = vim.fn.strdisplaywidth(text)
+  local w = pad * 2 + tw + 1 + maxfw
   local h = 1 + 2
   st.buf = api.nvim_create_buf(false, true)
   st.win = api.nvim_open_win(st.buf, false, {
@@ -46,17 +54,18 @@ function M.open(text)
   st.timer = vim.uv.new_timer()
   st.timer:start(
     0,
-    80,
+    interval,
     vim.schedule_wrap(function()
       if not (st.buf and api.nvim_buf_is_valid(st.buf)) then
         return
       end
       st.index = (st.index % #frames) + 1
+      local frame = frames[st.index]
       local prefix = string.rep(" ", pad)
-      api.nvim_buf_set_lines(st.buf, 1, 2, false, { prefix .. text .. " " .. frames[st.index] })
+      api.nvim_buf_set_lines(st.buf, 1, 2, false, { prefix .. text .. " " .. frame })
       pcall(api.nvim_buf_set_extmark, st.buf, ns, 1, pad, {
         id = 1,
-        end_col = pad + #text + #frames[st.index] + 1,
+        end_col = pad + #text + 1 + #frame,
         hl_group = "LedgerBlue0",
       })
     end)

@@ -99,6 +99,12 @@ function M.apply_float(ns)
     set(group, { link = target })
   end
   set("LedgerTabActive", { fg = get_hl("ExBlue").fg, bg = mix(get_hl("ExBlue").fg, win_bg_col, 78), bold = true })
+  -- per-platform tab tints (same recipe as LedgerTabActive, a distinct hue each)
+  local tab_hues = { Desktop = "ExBlue", Mobile = "ExGreen", Ios = "ExYellow", Android = "ExRed" }
+  for tab, ex in pairs(tab_hues) do
+    local c = get_hl(ex).fg
+    set("LedgerTab" .. tab, { fg = c, bg = mix(c, win_bg_col, 78), bold = true })
+  end
   set("LedgerScan", { bg = mix(get_hl("ExBlue").fg, win_bg_col, 88) })
 end
 

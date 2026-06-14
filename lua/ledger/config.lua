@@ -21,9 +21,18 @@ M.defaults = {
   builder = {
     border = false, -- no window border by default (set true for "single")
     transparent = false, -- opaque panel by default; true = see-through
-    loader = true, -- show the braille loader animation on open
+    loader = true, -- show the loader animation on open
     animation = "max", -- "max" | "tasteful" | "minimal" | "off"
     backdrop = true, -- dim the rest of the editor while open
+    -- spinner.nvim patterns per role (see lua/ledger/builder/ui/spin.lua).
+    -- Any name from require("spinner.pattern") works; falls back to dotsCircle.
+    spinner = {
+      loader = "dotsCircle", -- the loader float on open
+      process = "aesthetic", -- the activity bar on running process cards
+      pipeline = "dots", -- the running-step glyph in the pipeline State column
+      -- the pipeline Step-column bullet is the static star "✶" (not animated)
+      -- "material" is reserved for a future spot (e.g. a footer build shimmer)
+    },
   },
 }
 

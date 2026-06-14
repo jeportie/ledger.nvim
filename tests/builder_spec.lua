@@ -172,6 +172,7 @@ describe("ledger.builder.ui.panes", function()
     device = "nanoSP",
     root = "/repo/LedgerHQ-ledger-live",
     tick = 3,
+    bottom = "logs",
     focus = { col = "pipeline", idx = 2 },
     steps = {
       { id = "deps", label = "deps installed", template = "mobile.install" },
@@ -193,12 +194,27 @@ describe("ledger.builder.ui.panes", function()
     end
   end
 
+  -- flatten all segment text in a list of volt lines into one string
+  local function flat(lines)
+    local s = ""
+    for _, line in ipairs(lines) do
+      for _, seg in ipairs(line) do
+        s = s .. (seg[1] or "")
+      end
+    end
+    return s
+  end
+
   it("renders all pane content without error", function()
     is_lines(panes.header(fake))
-    is_lines(panes.pipeline_content(fake))
-    is_lines(panes.processes_content(fake))
+    is_lines(panes.pipeline_content(fake, 44, 14))
+    is_lines(panes.processes_content(fake, 44, 12))
     is_lines(panes.logs_content(fake, 10))
     is_lines(panes.stats_content(fake, 40))
+    is_lines(panes.stats_history(fake, 24))
+    is_lines(panes.stats_buildtime(fake, 24))
+    is_lines(panes.stats_passrate(fake, 24))
+    is_lines(panes.bottom_indicator(fake))
     is_lines(panes.wrong_folder_content("/home/u"))
     is_lines(panes.cheatsheet())
   end)
@@ -215,24 +231,73 @@ describe("ledger.builder.ui.panes", function()
     assert.is_truthy(joined:find("not inside", 1, true))
   end)
 
-  it("header shows iOS/Android subtabs only on mobile", function()
+  it("header is the same height on desktop and mobile; subtabs only on mobile", function()
     local mobile = panes.header(fake)
-    -- mobile header has tabs line + subtab line + meta + blank (>=4)
-    assert.is_true(#mobile >= 4)
     local desktop = panes.header(vim.tbl_extend("force", {}, fake, { platform = "desktop" }))
-    assert.is_true(#desktop >= 3)
+    -- a blank line replaces the subtab row on desktop → identical height
+    assert.equals(#mobile, #desktop)
+    assert.is_truthy(flat(mobile):find("iOS", 1, true))
+    assert.is_truthy(flat(mobile):find("Android", 1, true))
+    assert.is_nil(flat(desktop):find("Android", 1, true))
   end)
 
-  it("pipeline renders a progress bar + a bordered table", function()
-    local lines = panes.pipeline_content(fake, 44)
-    -- progress bar + blank + table (top border + header + rows + borders)
-    assert.is_true(#lines >= #fake.steps + 4)
+  it("header shows a centered title when borderless", function()
+    -- config default border = false → the header carries the title itself
+    assert.is_truthy(flat(panes.header(fake)):find("Ledger Builder", 1, true))
   end)
 
-  it("processes render as a 2-column grid of cards", function()
-    local lines = panes.processes_content(fake, 44)
-    -- 3 procs → 2 grid rows of bordered mini-tables; each card is several lines
-    assert.is_true(#lines >= 6)
+  it("uses the per-tab active highlight groups", function()
+    local function active_hl(lines, label)
+      for _, line in ipairs(lines) do
+        for _, seg in ipairs(line) do
+          if seg[1] and seg[1]:find(label, 1, true) then
+            return seg[2]
+          end
+        end
+      end
+    end
+    assert.equals(
+      "LedgerTabDesktop",
+      active_hl(panes.header(vim.tbl_extend("force", {}, fake, { platform = "desktop" })), "Desktop")
+    )
+    assert.equals("LedgerTabIos", active_hl(panes.header(fake), "iOS"))
+  end)
+
+  it("pipeline fills the pane height and uses the ✶ step bullet", function()
+    local lines = panes.pipeline_content(fake, 44, 16)
+    -- progress bar + blank + steps distributed to fill → exactly height lines
+    assert.equals(16, #lines)
+    -- the focused step (idx 2) leads with ▶; the others with ✶
+    local s = flat(lines)
+    assert.is_truthy(s:find("✶", 1, true))
+    assert.is_truthy(s:find("▶", 1, true))
+  end)
+
+  it("pipeline fills the same height regardless of step count", function()
+    local few = vim.tbl_extend("force", {}, fake, {
+      steps = { { id = "a", label = "one" }, { id = "b", label = "two" } },
+      statuses = { a = "done", b = "pending" },
+    })
+    assert.equals(16, #panes.pipeline_content(few, 44, 16))
+  end)
+
+  it("processes tile to fill the pane (2/3/4 → grid that fills height)", function()
+    local function procs(n)
+      local p = {}
+      for i = 1, n do
+        p[i] = { name = "p" .. i, label = "Proc" .. i, alive = i % 2 == 0, count = 1 }
+      end
+      return vim.tbl_extend("force", {}, fake, { procs = p, focus = { col = "processes", idx = 1 } })
+    end
+    -- each count fills exactly the requested height
+    assert.equals(12, #panes.processes_content(procs(2), 60, 12))
+    assert.equals(12, #panes.processes_content(procs(3), 60, 12))
+    assert.equals(12, #panes.processes_content(procs(4), 60, 12))
+    -- all process labels are rendered
+    local s = flat(panes.processes_content(procs(4), 60, 12))
+    for i = 1, 4 do
+      assert.is_truthy(s:find("Proc" .. i, 1, true))
+    end
   end)
 
   it("process popup content has command, log + action footer", function()

@@ -16,7 +16,6 @@ local M = {}
 
 local SPIN_MS = 120
 local PROC_REFRESH_EVERY = 16 -- ticks (~2s) between process liveness polls
-local RING = { "pipeline", "processes", "logs", "stats" }
 local TITLES = { pipeline = "PIPELINE", processes = "PROCESSES", logs = "LOGS", stats = "STATS" }
 local DEVICES = { "nanoS", "nanoSP", "nanoX", "stax", "flex" }
 local IOS_CONFIGS = { "ios.sim.debug", "ios.sim.release", "ios.sim.staging", "ios.sim.prerelease" }
@@ -36,16 +35,18 @@ local function default_config(flag)
   return flag == "android" and "android.emu.release" or "ios.sim.debug"
 end
 
--- ── ring / focus helpers ────────────────────────────────────────────────────
+-- ── focus helpers ───────────────────────────────────────────────────────────
+-- The top row is fixed: Pipeline (left) | Processes (right). h/l move focus
+-- between them; the bottom row (logs/stats) is informational.
 
 local function left_view()
-  return RING[state.pane_i]
+  return "pipeline"
 end
 local function right_view()
-  return RING[(state.pane_i % #RING) + 1]
+  return "processes"
 end
 local function focused_view()
-  return state.side == "right" and right_view() or left_view()
+  return state.side == "right" and "processes" or "pipeline"
 end
 
 local function view_len(view)
@@ -153,9 +154,9 @@ local function render_view(view, inner_w, height)
   local panes = require("ledger.builder.ui.panes")
   local content
   if view == "pipeline" then
-    content = panes.pipeline_content(state, inner_w)
+    content = panes.pipeline_content(state, inner_w, height)
   elseif view == "processes" then
-    content = panes.processes_content(state, inner_w)
+    content = panes.processes_content(state, inner_w, height)
   elseif view == "logs" then
     content = panes.logs_content(state, height)
   else
@@ -172,9 +173,38 @@ local function divider(n)
   return out
 end
 
-local function sections()
+-- Top row: Pipeline | divider | Processes (always visible, side by side).
+local function top_row()
+  local ui = require("volt.ui")
+  local left = render_view("pipeline", state.pane_inner, state.top_h)
+  local right = render_view("processes", state.pane_inner, state.top_h)
+  return ui.grid_col({
+    { lines = left, w = state.pane_inner + 4, pad = 1 },
+    { lines = divider(#left), w = 1, pad = 1 },
+    { lines = right, w = state.pane_inner + 4 },
+  })
+end
+
+-- Bottom row: Logs (full width) or Stats (3 columns), toggled with < / >.
+local function bottom_row(inner_w, h)
   local panes = require("ledger.builder.ui.panes")
   local ui = require("volt.ui")
+  if state.bottom == "stats" then
+    local col = math.max(14, math.floor(inner_w / 3) - 4)
+    local function sbox(title, fn)
+      return panes.box(title, pad_to(fn(state, col), h), col)
+    end
+    return ui.grid_col({
+      { lines = sbox("HISTORY", panes.stats_history), w = col + 4 },
+      { lines = sbox("BUILD", panes.stats_buildtime), w = col + 4 },
+      { lines = sbox("PASS", panes.stats_passrate), w = col + 4 },
+    })
+  end
+  return render_view("logs", inner_w, h)
+end
+
+local function sections()
+  local panes = require("ledger.builder.ui.panes")
   return {
     {
       name = "header",
@@ -185,42 +215,39 @@ local function sections()
     {
       name = "body",
       lines = function()
-        local pane_inner = state.pane_inner
-        local pane_h = state.pane_h
+        local body_h = state.top_h + state.bottom_h + 1
         if not state.root then
-          return panes.box("BUILDER", pad_to(panes.wrong_folder_content(state.cwd), pane_h), state.full_inner)
+          return panes.box("BUILDER", pad_to(panes.wrong_folder_content(state.cwd), body_h), state.full_inner)
         end
         if state.help then
-          return panes.box("HELP · cheatsheet", pad_to(panes.cheatsheet(), pane_h), state.full_inner)
+          return panes.box("HELP · cheatsheet", pad_to(panes.cheatsheet(), body_h), state.full_inner)
         end
-        -- vertical (narrow screen): one pane, full width; Ctrl-t still cycles
+        local out = {}
+        local function append(lines)
+          for _, l in ipairs(lines) do
+            out[#out + 1] = l
+          end
+        end
         if state.winlayout == "vertical" then
-          return render_view(left_view(), state.full_inner, pane_h)
+          -- narrow screen: stack Pipeline, Processes, then the bottom view
+          append(render_view("pipeline", state.full_inner, state.top_h))
+          out[#out + 1] = {}
+          append(render_view("processes", state.full_inner, state.top_h))
+        else
+          append(top_row())
         end
-        local left = render_view(left_view(), pane_inner, pane_h)
-        local right = render_view(right_view(), pane_inner, pane_h)
-        return ui.grid_col({
-          { lines = left, w = pane_inner + 4, pad = 1 },
-          { lines = divider(#left), w = 1, pad = 1 },
-          { lines = right, w = pane_inner + 4 },
-        })
+        out[#out + 1] = {}
+        append(bottom_row(state.full_inner, state.bottom_h))
+        return out
       end,
     },
     {
-      name = "indicator",
+      name = "footer",
       lines = function()
         if not state.root or state.help then
           return { {} }
         end
-        local dots = { {} }
-        local row = { { "  " } }
-        for i, v in ipairs(RING) do
-          local on = (i == state.pane_i) or (i == (state.pane_i % #RING) + 1)
-          row[#row + 1] = { (on and "●" or "○") .. " ", on and "LedgerStateRunning" or "LedgerBuilderDim" }
-          row[#row + 1] = { TITLES[v]:lower() .. "  ", on and "LedgerBuilderTitle" or "LedgerBuilderDim" }
-        end
-        dots[#dots + 1] = row
-        return dots
+        return { panes.bottom_indicator(state), {} }
       end,
     },
   }
@@ -232,9 +259,10 @@ local function redraw(which)
   end
 end
 
--- TyprStats-style sizing: single-pane ~80 wide, horizontal ~160; height a
--- modest content height (not full-screen). Responsive: vertical single-pane
--- when the screen is too narrow for two panes.
+-- TyprStats-style sizing: single-pane ~80 wide, horizontal ~160. Two stacked
+-- content rows — top (Pipeline | Processes) of height top_h, bottom (Logs or
+-- Stats) of height bottom_h — sized from the screen minus chrome. Responsive:
+-- a vertical stack when the screen is too narrow for the two-column top row.
 local function compute_dims()
   local horizontal = vim.o.columns > 170
   state.winlayout = horizontal and "horizontal" or "vertical"
@@ -246,7 +274,12 @@ local function compute_dims()
   else
     state.pane_inner = state.full_inner
   end
-  state.pane_h = math.max(10, math.min(18, vim.o.lines - 11))
+  -- chrome ≈ header(6) + 2×box borders(4) + separator(1) + footer(2); the
+  -- vertical stack adds a third box's borders.
+  local chrome = state.winlayout == "vertical" and 20 or 15
+  local avail = math.max(18, vim.o.lines - chrome)
+  state.top_h = math.max(12, math.min(18, math.ceil(avail * 0.58)))
+  state.bottom_h = math.max(7, math.min(14, avail - state.top_h))
 end
 
 -- Rebuild layout + buffer when section line counts change (tabs/subtab/pane/
@@ -438,9 +471,9 @@ function M.proc_popup(p)
   end, opts)
 end
 
-local function cycle_pane(delta)
-  state.pane_i = ((state.pane_i - 1 + delta) % #RING) + 1
-  state.side = "left"
+-- < / > swap the bottom row between Logs and Stats (Pipeline + Processes stay).
+local function toggle_bottom()
+  state.bottom = state.bottom == "stats" and "logs" or "stats"
   rebuild()
 end
 
@@ -717,7 +750,24 @@ end
 -- ── timers / animation ───────────────────────────────────────────────────────
 
 local function start_timer()
+  local anim = cfg().animation or "max"
+  local animated = anim == "max" or anim == "tasteful"
   state.timer = uv.new_timer()
+  if not animated then
+    -- "minimal" / "off": no spinner animation, just poll process liveness.
+    state.timer:start(
+      2000,
+      2000,
+      vim.schedule_wrap(function()
+        if not (state and state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
+          return
+        end
+        refresh_runtime()
+        redraw("body")
+      end)
+    )
+    return
+  end
   state.timer:start(
     SPIN_MS,
     SPIN_MS,
@@ -819,15 +869,9 @@ local function set_keymaps()
   end
   map("<Tab>", toggle_platform)
   map("<S-Tab>", toggle_platform)
-  map(">", function()
-    cycle_pane(1)
-  end)
-  map("<", function()
-    cycle_pane(-1)
-  end)
-  map("<C-t>", function()
-    cycle_pane(1)
-  end)
+  map(">", toggle_bottom)
+  map("<", toggle_bottom)
+  map("<C-t>", toggle_bottom)
   map("<CR>", activate)
   map("x", function()
     proc_action("kill")
@@ -896,7 +940,7 @@ local function build()
     root = root,
     cwd = cwd,
     help = false,
-    pane_i = 1,
+    bottom = "logs",
     side = "left",
     focus_idx = 1,
     buf = vim.api.nvim_create_buf(false, true),
