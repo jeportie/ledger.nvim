@@ -142,87 +142,111 @@ end
 
 -- ── ring sections (content only; controller boxes them) ─────────────────────
 
-function M.pipeline_content(st)
+local STATE_WORD =
+  { done = "done", running = "running", stale = "stale", failed = "failed", pending = "pending", ready = "ready" }
+
+-- Pipeline as a progress bar + a bordered table (Step · State · Dur), with
+-- state-colored cells and a spinner on the running step.
+function M.pipeline_content(st, inner_w)
   local tasks = require("ledger.tasks")
   local hl = require("ledger.builder.ui.hl")
-  local lines = {}
-  for i, step in ipairs(st.steps or {}) do
+  local ui = require("volt.ui")
+  inner_w = inner_w or 44
+  local steps = st.steps or {}
+
+  local done = 0
+  for _, s in ipairs(steps) do
+    if (st.statuses or {})[s.id] == "done" then
+      done = done + 1
+    end
+  end
+  local pct = #steps > 0 and math.floor((done / #steps) * 100) or 0
+  local bar = ui.progressbar({
+    w = math.max(8, inner_w - 12),
+    val = pct,
+    icon = { on = "┃", off = "┃" },
+    hl = { on = "LedgerGreen0", off = "LedgerSeparator" },
+  })
+  table.insert(bar, 1, { "  " })
+  bar[#bar + 1] = { "  " .. done .. "/" .. #steps, "LedgerLabel" }
+
+  local rows = { { " Step", "State", "Dur" } }
+  for i, step in ipairs(steps) do
     local state = (st.statuses or {})[step.id] or "pending"
     local g, ghl = glyph(state, st.tick or 0, state == "running" and hl.pulse or nil)
     local focused = st.focus and st.focus.col == "pipeline" and st.focus.idx == i
-    local label_seg = { " " .. step.label, focused and "LedgerBuilderTitle" or "Normal" }
-    if st.on_step then
-      label_seg[3] = function()
-        st.on_step(i)
-      end
-    end
-    local row = {
-      focus_gutter(focused),
-      { tostring(i) .. " ", "LedgerBuilderDim" },
-      { g, ghl },
-      label_seg,
-    }
-    if state == "stale" then
-      row[#row + 1] = { "  stale", "LedgerStateStale" }
-    elseif state == "running" then
-      row[#row + 1] = { "  …", ghl }
-    else
-      local res = step.template and tasks.last_result(step.template) or nil
+    local mark = focused and "▶ " or "  "
+    local opt = step.optional and " ○" or ""
+    local dur = "-"
+    if step.template then
+      local res = tasks.last_result(step.template)
       if res then
-        row[#row + 1] =
-          { "  " .. (fmt_dur(res.duration) or ""), res.code == 0 and "LedgerStateDone" or "LedgerStateFailed" }
+        dur = fmt_dur(res.duration) or "-"
       end
     end
-    lines[#lines + 1] = row
+    rows[#rows + 1] = {
+      mark .. tostring(i) .. " " .. step.label .. opt,
+      { { g .. " " .. (STATE_WORD[state] or state), ghl } },
+      dur,
+    }
+  end
+
+  local lines = { bar, {} }
+  for _, l in ipairs(ui.table(rows, inner_w, "LedgerTitle")) do
+    lines[#lines + 1] = l
   end
   return lines
 end
 
--- An animated activity bar for a process: a moving filled block over a track
--- when alive (motion = liveness), a dim empty track when down.
-local function activity_bar(alive, tick, width)
-  width = width or 16
+-- A loading-bar fill animation: value sweeps 0→100 by tick for alive procs.
+local function sweep_pct(alive, tick)
   if not alive then
-    return { { string.rep("▱", width), "LedgerBuilderDim" } }
+    return 0
   end
-  local pos = (tick % width) + 1
-  local cells = {}
-  for j = 1, width do
-    local d = math.abs(j - pos)
-    cells[j] = (d == 0 and "▰") or (d == 1 and "▰") or "▱"
-  end
-  return { { table.concat(cells), "LedgerStateRunning" } }
+  return ((tick * 7) % 100)
 end
 
--- Each process is a 2-line card: a status line and an animated activity line.
-function M.processes_content(st)
-  local lines = {}
-  for i, p in ipairs(st.procs or {}) do
+-- Processes as a 2-column grid of per-process cards (bordered mini tables):
+-- title = name (state-colored, ▶ when focused), rows = status, port/uptime, and
+-- an animated activity bar.
+function M.processes_content(st, inner_w)
+  local ui = require("volt.ui")
+  inner_w = inner_w or 44
+  local card_w = math.max(18, math.floor((inner_w - 2) / 2))
+  local procs = st.procs or {}
+
+  local function card(i, p)
     local focused = st.focus and st.focus.col == "processes" and st.focus.idx == i
-    local dot = { p.alive and "●" or "○", p.alive and "LedgerStateDone" or "LedgerStatePending" }
-    local label_seg = { " " .. p.label, focused and "LedgerBuilderTitle" or "Normal" }
-    if st.on_proc then
-      label_seg[3] = function()
-        st.on_proc(i)
-      end
-      dot[3] = label_seg[3]
-    end
-    -- line 1: focus gutter, dot, label, port/count/state
-    local row = { focus_gutter(focused), dot, label_seg }
+    local state_hl = p.alive and "LedgerStateDone" or "LedgerStatePending"
+    local title = { (focused and "▶ " or "") .. p.label, focused and "LedgerTitle" or state_hl }
+    local meta = {}
     if p.port then
-      row[#row + 1] = { "  :" .. p.port, "LedgerBuilderDim" }
+      meta[#meta + 1] = ":" .. p.port
     end
     if p.count and p.count > 0 then
-      row[#row + 1] = { "  " .. p.count .. " ctr", "LedgerStateDone" }
+      meta[#meta + 1] = p.count .. " ctr"
     end
-    row[#row + 1] = { p.alive and "  up" or "  down", p.alive and "LedgerStateDone" or "LedgerBuilderDim" }
-    lines[#lines + 1] = row
-    -- line 2: animated activity bar
-    local bar = { { "    " } }
-    for _, seg in ipairs(activity_bar(p.alive, st.tick or 0, 16)) do
-      bar[#bar + 1] = seg
+    local status_cell = { { { p.alive and "● running" or "○ down", state_hl } } }
+    local meta_cell = { { { #meta > 0 and table.concat(meta, "  ") or "—", "LedgerLabel" } } }
+    local activity = ui.progressbar({
+      w = math.max(6, card_w - 4),
+      val = sweep_pct(p.alive, st.tick or 0),
+      icon = { on = "▰", off = "▱" },
+      hl = { on = p.alive and "LedgerBlue0" or "LedgerSeparator", off = "LedgerSeparator" },
+    })
+    return ui.table({ status_cell, meta_cell, { activity } }, card_w, "normal", title)
+  end
+
+  local lines = {}
+  for i = 1, #procs, 2 do
+    local cols = { { lines = card(i, procs[i]), w = card_w, pad = 2 } }
+    if procs[i + 1] then
+      cols[#cols + 1] = { lines = card(i + 1, procs[i + 1]), w = card_w }
     end
-    lines[#lines + 1] = bar
+    for _, l in ipairs(ui.grid_col(cols)) do
+      lines[#lines + 1] = l
+    end
+    lines[#lines + 1] = {}
   end
   return lines
 end
@@ -433,7 +457,7 @@ function M.cheatsheet()
     row("Tab", "switch Desktop / Mobile"),
     row("D / M", "desktop / mobile platform"),
     row("i / a", "iOS / Android subtab (mobile)"),
-    row("Ctrl-t", "cycle the visible panes", "Pipeline▸Processes▸Logs▸Stats"),
+    row("< / >", "cycle the visible panes", "Pipeline▸Processes▸Logs▸Stats"),
     {},
     { { "  Navigation", "LedgerBuilderTitle" } },
     row("h / l / ←→", "switch focus column"),

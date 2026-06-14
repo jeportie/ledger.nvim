@@ -1,116 +1,118 @@
 -- ledger.builder.ui.hl
 --
--- Highlight groups for the Builder dashboard. Two layers:
---   * global accent aliases (LedgerState*, LedgerBuilder*) linked to volt's
---     Ex* groups so colours track the theme: done=green, running=blue,
---     failed=red, stale=yellow, pending/dim=grey.
---   * an opaque, slightly-tinted panel background (LedgerBuilderNormal) derived
---     from the theme's Normal/NormalFloat bg, applied to the float via a
---     window-local namespace so the dashboard is solid even under a
---     transparent colorscheme. Pulse variants give running items a heartbeat.
+-- Window-local highlight namespace modelled on wrapped.nvim's ui/hl.lua: an
+-- opaque (border-aware) panel + intensity-leveled accent colours
+-- Ledger{Red,Green,Blue,Yellow}{0..3} mixed into the panel bg via volt.color,
+-- plus Title/Label/Separator and the state/tab/pulse aliases the panes use.
+-- Bound to the float with nvim_win_set_hl_ns so it stays solid under a
+-- transparent colorscheme without touching global highlights.
 
+local api = vim.api
 local M = {}
 
--- window-local highlight namespace (created lazily)
 M.ns = nil
 
-local function hexbg(name, fallback)
-  local h = vim.api.nvim_get_hl(0, { name = name, link = false })
-  if h and h.bg then
-    return string.format("#%06x", h.bg)
-  end
-  return fallback
+local function get_hl(name)
+  return require("volt.utils").get_hl(name)
+end
+local function lighten(hex, pct)
+  return require("volt.color").change_hex_lightness(hex, pct)
+end
+local function mix(a, b, pct)
+  return require("volt.color").mix(a, b, pct)
 end
 
-local function hexfg(name, fallback)
-  local h = vim.api.nvim_get_hl(0, { name = name, link = false })
-  if h and h.fg then
-    return string.format("#%06x", h.fg)
-  end
-  return fallback
-end
-
--- Resolve the opaque panel background: prefer Normal's real bg, else
--- NormalFloat, else a sensible dark fallback; lightened slightly so the panel
--- reads as a distinct surface.
 local function panel_bg()
-  local bg = hexbg("Normal", nil) or hexbg("NormalFloat", nil) or "#1e1e2e"
-  local ok, lighten = pcall(function()
-    return require("volt.color").change_hex_lightness
-  end)
-  if ok and lighten then
-    return lighten(bg, 3)
+  if vim.g.base46_cache then
+    local ok, colors = pcall(dofile, vim.g.base46_cache .. "colors")
+    if ok and colors and colors.black then
+      return colors.black
+    end
   end
-  return bg
+  return get_hl("Normal").bg
 end
 
--- Global accent aliases (theme-tracking).
-M.groups = {
-  LedgerBuilderTitle = { link = "ExBlue" },
-  LedgerBuilderDim = { link = "Comment" },
-  LedgerBuilderKey = { link = "ExYellow" },
-  LedgerBuilderOn = { link = "ExGreen" },
-  LedgerBuilderOff = { link = "Comment" },
-  LedgerStateDone = { link = "ExGreen" },
-  LedgerStateRunning = { link = "ExBlue" },
-  LedgerStatePending = { link = "Comment" },
-  LedgerStateStale = { link = "ExYellow" },
-  LedgerStateFailed = { link = "ExRed" },
-}
+-- Define all builder groups inside `ns`. `opts.border` / `opts.transparent`
+-- shape the panel bg (matches wrapped.nvim).
+function M.apply_float(ns)
+  if not get_hl("ExBlue").fg then
+    require("volt.highlights")
+  end
+  local cfg = require("ledger.config").get().builder or {}
+  local border = cfg.border
+  local transparent = cfg.transparent
 
--- Define global aliases + the ns-local opaque panel + tinted accents + pulse
--- variants. `transparent` skips the opaque bg (see-through panel).
-function M.setup(opts)
-  opts = opts or {}
-  for name, def in pairs(M.groups) do
-    pcall(vim.api.nvim_set_hl, 0, name, vim.tbl_extend("force", { default = true }, def))
+  local bg = panel_bg()
+  local has_bg = bg ~= nil and not transparent
+  local fallback = bg or "#1e1e2e"
+  local win_bg_col = has_bg and bg or fallback
+  local win_bg = (not has_bg) and "NONE" or (border and win_bg_col or lighten(win_bg_col, 2))
+  local text = get_hl("Normal").fg or "#cdd6f4"
+  local comment = get_hl("Comment").fg or "#6c7086"
+
+  local set = function(group, o)
+    pcall(api.nvim_set_hl, ns, group, o)
   end
 
-  M.ns = M.ns or vim.api.nvim_create_namespace("ledger_builder_hl")
-  local ns = M.ns
+  set("Normal", { bg = win_bg, fg = text })
+  set("NormalFloat", { bg = win_bg, fg = text })
+  set("FloatBorder", {
+    fg = border and lighten(fallback, 15) or win_bg_col,
+    bg = (not has_bg) and "NONE" or win_bg,
+  })
+  set("LedgerTitle", { fg = get_hl("ExBlue").fg, bold = true })
+  set("LedgerLabel", { fg = lighten(comment, 20) })
+  set("LedgerSeparator", { fg = mix(comment, win_bg_col, 60) })
 
-  local bg = opts.transparent and nil or panel_bg()
-  local fg = hexfg("Normal", "#cdd6f4")
-
-  if bg then
-    vim.api.nvim_set_hl(0, "LedgerBuilderNormal", { bg = bg, fg = fg })
-    vim.api.nvim_set_hl(ns, "Normal", { link = "LedgerBuilderNormal" })
-    vim.api.nvim_set_hl(ns, "NormalFloat", { link = "LedgerBuilderNormal" })
-  else
-    vim.api.nvim_set_hl(0, "LedgerBuilderNormal", { link = "Normal" })
+  -- intensity-leveled accents (0 brightest … 3 dimmest)
+  local sources = {
+    Red = get_hl("ExRed").fg,
+    Green = get_hl("ExGreen").fg,
+    Blue = get_hl("ExBlue").fg,
+    Yellow = get_hl("ExYellow").fg,
+  }
+  local levels = { 10, 40, 60, 80 }
+  for name, fg in pairs(sources) do
+    for i, pct in ipairs(levels) do
+      set(("Ledger%s%d"):format(name, i - 1), { fg = mix(fg, win_bg_col, pct) })
+    end
   end
-  vim.api.nvim_set_hl(ns, "FloatBorder", { link = "LedgerBuilderTitle" })
 
-  -- pulse variants for running items: cycle bright→dim by tick. Mix the blue
-  -- accent toward the panel bg at a few strengths.
-  local mix
-  local ok = pcall(function()
-    mix = require("volt.color").mix
-  end)
-  local blue = hexfg("ExBlue", "#89b4fa")
-  local base = bg or hexbg("Normal", "#1e1e2e")
-  if ok and mix and base then
-    vim.api.nvim_set_hl(0, "LedgerPulse0", { fg = blue })
-    vim.api.nvim_set_hl(0, "LedgerPulse1", { fg = mix(blue, base, 45) })
-    vim.api.nvim_set_hl(0, "LedgerPulse2", { fg = mix(blue, base, 70) })
-    -- tabs: active = bright fg on a tinted bg; inactive = dim
-    vim.api.nvim_set_hl(0, "LedgerTabActive", { fg = blue, bg = mix(blue, base, 78), bold = true })
-    vim.api.nvim_set_hl(0, "LedgerTabInactive", { link = "Comment" })
-    vim.api.nvim_set_hl(0, "LedgerScan", { bg = mix(blue, base, 88) })
-  else
-    vim.api.nvim_set_hl(0, "LedgerPulse0", { link = "LedgerStateRunning" })
-    vim.api.nvim_set_hl(0, "LedgerPulse1", { link = "LedgerStateRunning" })
-    vim.api.nvim_set_hl(0, "LedgerPulse2", { link = "LedgerBuilderDim" })
-    vim.api.nvim_set_hl(0, "LedgerTabActive", { link = "LedgerBuilderTitle" })
-    vim.api.nvim_set_hl(0, "LedgerTabInactive", { link = "Comment" })
-    vim.api.nvim_set_hl(0, "LedgerScan", { link = "LedgerBuilderDim" })
+  -- semantic / builder aliases used throughout the panes
+  local aliases = {
+    LedgerStateDone = "LedgerGreen0",
+    LedgerStateRunning = "LedgerBlue0",
+    LedgerStateStale = "LedgerYellow0",
+    LedgerStateFailed = "LedgerRed0",
+    LedgerStatePending = "LedgerSeparator",
+    LedgerBuilderTitle = "LedgerTitle",
+    LedgerBuilderDim = "LedgerLabel",
+    LedgerBuilderKey = "LedgerYellow0",
+    LedgerBuilderOn = "LedgerGreen0",
+    LedgerBuilderOff = "LedgerSeparator",
+    LedgerTabInactive = "LedgerSeparator",
+    LedgerPulse0 = "LedgerBlue0",
+    LedgerPulse1 = "LedgerBlue1",
+    LedgerPulse2 = "LedgerBlue2",
+  }
+  for group, target in pairs(aliases) do
+    set(group, { link = target })
   end
+  set("LedgerTabActive", { fg = get_hl("ExBlue").fg, bg = mix(get_hl("ExBlue").fg, win_bg_col, 78), bold = true })
+  set("LedgerScan", { bg = mix(get_hl("ExBlue").fg, win_bg_col, 88) })
 end
 
 -- Pulse highlight name for a given tick (heartbeat 0→1→2→1→0…).
 function M.pulse(tick)
   local seq = { 0, 1, 2, 1 }
   return "LedgerPulse" .. seq[(math.floor(tick / 2) % #seq) + 1]
+end
+
+-- Compatibility entry point: ensure ns exists and groups are defined.
+function M.setup()
+  M.ns = M.ns or api.nvim_create_namespace("ledger_builder_hl")
+  M.apply_float(M.ns)
+  return M.ns
 end
 
 return M

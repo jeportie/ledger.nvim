@@ -153,9 +153,9 @@ local function render_view(view, inner_w, height)
   local panes = require("ledger.builder.ui.panes")
   local content
   if view == "pipeline" then
-    content = panes.pipeline_content(state)
+    content = panes.pipeline_content(state, inner_w)
   elseif view == "processes" then
-    content = panes.processes_content(state)
+    content = panes.processes_content(state, inner_w)
   elseif view == "logs" then
     content = panes.logs_content(state, height)
   else
@@ -399,7 +399,10 @@ function M.proc_popup(p)
     title_pos = "center",
     zindex = 260,
   })
-  vim.wo[win].winhighlight = "Normal:LedgerBuilderNormal,FloatBorder:LedgerBuilderTitle"
+  local hl = require("ledger.builder.ui.hl")
+  if hl.ns then
+    pcall(vim.api.nvim_win_set_hl_ns, win, hl.ns)
+  end
   vim.wo[win].cursorline = true
 
   local function close()
@@ -816,6 +819,12 @@ local function set_keymaps()
   end
   map("<Tab>", toggle_platform)
   map("<S-Tab>", toggle_platform)
+  map(">", function()
+    cycle_pane(1)
+  end)
+  map("<", function()
+    cycle_pane(-1)
+  end)
   map("<C-t>", function()
     cycle_pane(1)
   end)
@@ -860,18 +869,19 @@ end
 
 -- ── open / close ──────────────────────────────────────────────────────────────
 
-function M.open()
-  if state and state.win and vim.api.nvim_win_is_valid(state.win) then
-    vim.api.nvim_set_current_win(state.win)
-    return
-  end
+M._opening = false
+
+-- Build + show the dashboard (after the loader). Closes the loader on entry.
+local function build()
+  M._opening = false
+  require("ledger.builder.ui.loader").close()
 
   local volt = require("volt")
   local builder_cfg = cfg()
-  require("ledger.builder.ui.hl").setup({ transparent = builder_cfg.transparent })
+  local ns = require("ledger.builder.ui.hl").setup()
+  local border = builder_cfg.border and "single" or "none"
 
-  -- Detect from the CURRENT working dir only (no monorepo_root fallback): if
-  -- you're not inside a ledger-live checkout, the Builder must say so.
+  -- Detect from the CURRENT working dir only (no monorepo_root fallback).
   local detox = require("ledger.detox")
   local cwd = (vim.uv or vim.loop).cwd()
   local detected = detox.get_repo_root()
@@ -911,26 +921,20 @@ function M.open()
     row = math.floor((vim.o.lines - h) / 2),
     col = math.floor((vim.o.columns - width) / 2),
     style = "minimal",
-    border = "rounded",
+    border = border,
     title = " Ledger Builder ",
     title_pos = "center",
   })
 
-  -- opaque, theme-tracking panel via a window-local highlight namespace
-  local hl = require("ledger.builder.ui.hl")
-  if hl.ns then
-    vim.api.nvim_win_set_hl_ns(state.win, hl.ns)
-  end
-  vim.wo[state.win].winhighlight =
-    "Normal:LedgerBuilderNormal,NormalFloat:LedgerBuilderNormal,FloatBorder:LedgerBuilderTitle"
+  -- opaque, theme-tracking panel via the window-local highlight namespace
+  pcall(vim.api.nvim_win_set_hl_ns, state.win, ns)
   if builder_cfg.transparent then
     vim.wo[state.win].winblend = 0
   end
 
   volt.run(state.buf, { h = h, w = state.W })
 
-  -- MOUSE: register the buffer with volt's event system (this is what makes
-  -- the {text, hl, fn} segments clickable).
+  -- MOUSE: register the buffer with volt's event system.
   local volt_events = require("volt.events")
   volt_events.add(state.buf)
   volt_events.enable()
@@ -948,8 +952,30 @@ function M.open()
   start_timer()
 end
 
+function M.open()
+  if state and state.win and vim.api.nvim_win_is_valid(state.win) then
+    vim.api.nvim_set_current_win(state.win)
+    return
+  end
+  if M._opening then
+    return
+  end
+  local builder_cfg = cfg()
+  if builder_cfg.loader ~= false then
+    M._opening = true
+    require("ledger.builder.ui.loader").open("Loading Ledger Builder")
+    vim.defer_fn(build, 420)
+  else
+    build()
+  end
+end
+
 function M.close()
   stop_timer()
+  M._opening = false
+  pcall(function()
+    require("ledger.builder.ui.loader").close()
+  end)
   if state then
     local win, buf = state.win, state.buf
     state = nil

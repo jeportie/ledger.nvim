@@ -19,7 +19,9 @@ M.defaults = {
     env_var = "SEED",
   },
   builder = {
+    border = false, -- no window border by default (set true for "single")
     transparent = false, -- opaque panel by default; true = see-through
+    loader = true, -- show the braille loader animation on open
     animation = "max", -- "max" | "tasteful" | "minimal" | "off"
     backdrop = true, -- dim the rest of the editor while open
   },
