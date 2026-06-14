@@ -91,7 +91,11 @@ local function refresh_statuses()
   local tasks = require("ledger.tasks")
   local detox = require("ledger.detox")
 
-  state.steps = pipeline.steps(state.platform, { platform_flag = state.platform_flag })
+  state.steps = pipeline.steps(state.platform, {
+    platform_flag = state.platform_flag,
+    config = state.config,
+    desktop_build = state.desktop_build,
+  })
   state.procs = proc.for_platform(state.platform, state.platform_flag)
   local alive = {}
   for _, p in ipairs(state.procs) do
@@ -185,22 +189,28 @@ local function top_row()
   })
 end
 
--- Bottom row: Logs (full width) or Stats (3 columns), toggled with < / >.
-local function bottom_row(inner_w, h)
+-- Bottom row, exactly `row_w` wide so it aligns with the top row. Logs is one
+-- full-width box; Stats is 3 boxes with `│` dividers between them (mirroring the
+-- top row's divider). `(c1+5)+(2)+(c2+5)+(2)+(c3+4) = c1+c2+c3 + 18 = row_w`.
+local function bottom_row(row_w, h)
   local panes = require("ledger.builder.ui.panes")
   local ui = require("volt.ui")
   if state.bottom == "stats" then
-    local col = math.max(14, math.floor(inner_w / 3) - 4)
-    local function sbox(title, fn)
+    local base = math.max(12, math.floor((row_w - 18) / 3))
+    local c3 = math.max(12, row_w - 18 - 2 * base)
+    local function sbox(title, fn, col)
       return panes.box(title, pad_to(fn(state, col), h), col)
     end
+    local div = divider(h + 2) -- each stats box is h + 2 lines tall
     return ui.grid_col({
-      { lines = sbox("HISTORY", panes.stats_history), w = col + 4 },
-      { lines = sbox("BUILD", panes.stats_buildtime), w = col + 4 },
-      { lines = sbox("PASS", panes.stats_passrate), w = col + 4 },
+      { lines = sbox("HISTORY", panes.stats_history, base), w = base + 4, pad = 1 },
+      { lines = div, w = 1, pad = 1 },
+      { lines = sbox("BUILD", panes.stats_buildtime, base), w = base + 4, pad = 1 },
+      { lines = div, w = 1, pad = 1 },
+      { lines = sbox("PASS", panes.stats_passrate, c3), w = c3 + 4 },
     })
   end
-  return render_view("logs", inner_w, h)
+  return render_view("logs", row_w - 4, h)
 end
 
 local function sections()
@@ -220,7 +230,13 @@ local function sections()
           return panes.box("BUILDER", pad_to(panes.wrong_folder_content(state.cwd), body_h), state.full_inner)
         end
         if state.help then
-          return panes.box("HELP · cheatsheet", pad_to(panes.cheatsheet(), body_h), state.full_inner)
+          local content = { panes.help_tabs(state), {} }
+          local tab = (state.help_tab == "commands") and panes.help_commands(state, state.full_inner)
+            or panes.help_shortcuts()
+          for _, l in ipairs(tab) do
+            content[#content + 1] = l
+          end
+          return panes.box("HELP", pad_to(content, body_h), state.full_inner)
         end
         local out = {}
         local function append(lines)
@@ -233,21 +249,30 @@ local function sections()
           append(render_view("pipeline", state.full_inner, state.top_h))
           out[#out + 1] = {}
           append(render_view("processes", state.full_inner, state.top_h))
+          out[#out + 1] = {}
+          if state.bottom == "stats" then
+            append(
+              panes.box(
+                TITLES.stats,
+                pad_to(panes.stats_content(state, state.full_inner), state.bottom_h),
+                state.full_inner
+              )
+            )
+          else
+            append(render_view("logs", state.full_inner, state.bottom_h))
+          end
         else
           append(top_row())
+          out[#out + 1] = {}
+          append(bottom_row(state.row_w, state.bottom_h))
         end
-        out[#out + 1] = {}
-        append(bottom_row(state.full_inner, state.bottom_h))
         return out
       end,
     },
     {
       name = "footer",
       lines = function()
-        if not state.root or state.help then
-          return { {} }
-        end
-        return { panes.bottom_indicator(state), {} }
+        return { {} } -- bottom margin (the logs/stats legend lives in `?` help)
       end,
     },
   }
@@ -259,10 +284,10 @@ local function redraw(which)
   end
 end
 
--- TyprStats-style sizing: single-pane ~80 wide, horizontal ~160. Two stacked
--- content rows — top (Pipeline | Processes) of height top_h, bottom (Logs or
--- Stats) of height bottom_h — sized from the screen minus chrome. Responsive:
--- a vertical stack when the screen is too narrow for the two-column top row.
+-- Sizing: single-pane ~80 wide, horizontal ~160. Two stacked content rows —
+-- top (Pipeline | Processes) of height top_h, bottom (Logs or Stats) of height
+-- bottom_h. top_h is sized to fit the tallest platform's bordered pipeline
+-- table so both panes align; row_w is the shared content width both rows match.
 local function compute_dims()
   local horizontal = vim.o.columns > 170
   state.winlayout = horizontal and "horizontal" or "vertical"
@@ -274,12 +299,20 @@ local function compute_dims()
   else
     state.pane_inner = state.full_inner
   end
-  -- chrome ≈ header(6) + 2×box borders(4) + separator(1) + footer(2); the
-  -- vertical stack adds a third box's borders.
-  local chrome = state.winlayout == "vertical" and 20 or 15
-  local avail = math.max(18, vim.o.lines - chrome)
-  state.top_h = math.max(12, math.min(18, math.ceil(avail * 0.58)))
-  state.bottom_h = math.max(7, math.min(14, avail - state.top_h))
+  -- top_h fits the pipeline: leading blank + bar + blank (3) + voltui.table
+  -- (1 top border + 2 lines per row, rows = header + steps).
+  local pl = require("ledger.builder.pipeline")
+  local max_steps = math.max(
+    #pl.steps("desktop"),
+    #pl.steps("mobile", { platform_flag = "ios" }),
+    #pl.steps("mobile", { platform_flag = "android" })
+  )
+  state.top_h = 3 + (1 + 2 * (max_steps + 1))
+  -- chrome ≈ header(6) + top borders(2) + separator(1) + bottom borders(2) + footer(1) + margin
+  state.bottom_h = math.max(8, math.min(16, vim.o.lines - state.top_h - 13))
+  -- shared row width so the logs/stats row aligns exactly with the top row:
+  -- top grid = left(pane_inner+4)+pad1 + divider(1)+pad1 + right(pane_inner+4)
+  state.row_w = horizontal and (2 * (state.pane_inner + 4) + 3) or (state.full_inner + 4)
 end
 
 -- Rebuild layout + buffer when section line counts change (tabs/subtab/pane/
@@ -566,9 +599,19 @@ end
 -- detox configuration (iOS vs Android lists).
 local function pick_env()
   if state.platform == "desktop" then
-    open_menu("PWDEBUG", { "PWDEBUG=0", "PWDEBUG=1" }, "PWDEBUG=" .. (state.pwdebug or "0"), function(c)
-      state.pwdebug = c:match("=(%d)")
-      redraw("all")
+    -- desktop has no detox config: choose the build profile + MOCK
+    local choices = { "build: testing", "build: staging", "MOCK: off", "MOCK: on" }
+    open_menu("Desktop env", choices, "build: " .. (state.desktop_build or "testing"), function(c)
+      local b = c:match("^build:%s*(%S+)")
+      if b then
+        state.desktop_build = b
+        refresh_statuses()
+        rebuild()
+      else
+        local m = c:match("MOCK:%s*(%S+)")
+        state.mock = (m == "on") and "1" or "0"
+        redraw("all")
+      end
     end)
   else
     local choices = state.platform_flag == "android" and ANDROID_CONFIGS or IOS_CONFIGS
@@ -578,6 +621,15 @@ local function pick_env()
       rebuild()
     end)
   end
+end
+
+-- Toggle PWDEBUG (desktop Playwright inspector); no-op on mobile.
+local function pick_pwdebug()
+  if state.platform ~= "desktop" then
+    return
+  end
+  state.pwdebug = (state.pwdebug == "1") and "0" or "1"
+  redraw("all")
 end
 
 -- ── run-a-test flow (All / Pick file / By name|ticket, with discovery) ───────
@@ -598,6 +650,7 @@ local function do_run_test(scope_opts)
   local opts = vim.tbl_extend("force", { root = state.root }, scope_opts or {})
   if state.platform == "desktop" then
     opts.pwdebug = state.pwdebug == "1"
+    opts.mock = state.mock == "1"
   else
     opts.config = state.config
     opts.platform_flag = state.platform_flag
@@ -801,6 +854,7 @@ local function install_callbacks()
   state.on_subplatform = set_subplatform
   state.on_device = pick_device
   state.on_env = pick_env
+  state.on_pwdebug = pick_pwdebug
   state.on_step = function(i)
     -- focus the pipeline pane wherever it currently is, then run
     if left_view() == "pipeline" then
@@ -863,12 +917,18 @@ local function set_keymaps()
       side("left")
     end)
   end
-  -- Tab / Shift-Tab toggle Desktop ↔ Mobile
-  local function toggle_platform()
-    set_platform(state.platform == "desktop" and "mobile" or "desktop")
+  -- Tab / Shift-Tab toggle Desktop ↔ Mobile — or, while help is open, cycle the
+  -- help tabs (Shortcuts ↔ Cheatsheet).
+  local function tab_key()
+    if state.help then
+      state.help_tab = (state.help_tab == "commands") and "shortcuts" or "commands"
+      rebuild()
+    else
+      set_platform(state.platform == "desktop" and "mobile" or "desktop")
+    end
   end
-  map("<Tab>", toggle_platform)
-  map("<S-Tab>", toggle_platform)
+  map("<Tab>", tab_key)
+  map("<S-Tab>", tab_key)
   map(">", toggle_bottom)
   map("<", toggle_bottom)
   map("<C-t>", toggle_bottom)
@@ -888,12 +948,7 @@ local function set_keymaps()
     refresh_statuses()
     redraw("all")
   end)
-  map("D", function()
-    set_platform("desktop")
-  end)
-  map("M", function()
-    set_platform("mobile")
-  end)
+  map("p", pick_pwdebug)
   map("i", function()
     if state.platform == "mobile" then
       set_subplatform("ios")
@@ -935,11 +990,13 @@ local function build()
     platform = "desktop",
     platform_flag = "ios",
     config = default_config("ios"),
+    desktop_build = "testing",
     pwdebug = "0",
     tick = 0,
     root = root,
     cwd = cwd,
     help = false,
+    help_tab = "shortcuts",
     bottom = "logs",
     side = "left",
     focus_idx = 1,

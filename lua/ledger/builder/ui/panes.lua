@@ -77,11 +77,18 @@ function M.header(st)
 
   local lines = { {} } -- top margin (breathing room)
 
-  -- Centered title — only when there's no window border to carry it.
+  -- Centered title as a filled bar — only when there's no window border to
+  -- carry it. Every segment uses the LedgerTitleBar bg so it reads as a rectangle.
   if not cfg.border then
     local title = "Ledger Builder"
-    local pad = math.max(0, math.floor((width - vim.fn.strdisplaywidth(title)) / 2))
-    lines[#lines + 1] = { { string.rep(" ", pad) .. title, "LedgerTitle" } }
+    local tw = vim.fn.strdisplaywidth(title)
+    local lpad = math.max(0, math.floor((width - tw) / 2))
+    local rpad = math.max(0, width - tw - lpad)
+    lines[#lines + 1] = {
+      { string.rep(" ", lpad), "LedgerTitleBar" },
+      { title, "LedgerTitleBar" },
+      { string.rep(" ", rpad), "LedgerTitleBar" },
+    }
   end
 
   lines[#lines + 1] = {
@@ -125,12 +132,19 @@ function M.header(st)
     },
   }
   if st.platform == "desktop" then
+    local on_env = st.on_env and function()
+      st.on_env()
+    end or nil
+    meta[#meta + 1] = { "   build: ", "LedgerBuilderDim" }
+    meta[#meta + 1] = { st.desktop_build or "testing", "LedgerBuilderKey", on_env }
+    meta[#meta + 1] = { "   MOCK: ", "LedgerBuilderDim" }
+    meta[#meta + 1] = { st.mock or "0", "LedgerBuilderKey", on_env }
     meta[#meta + 1] = { "   PWDEBUG: ", "LedgerBuilderDim" }
     meta[#meta + 1] = {
       st.pwdebug or "0",
       "LedgerBuilderKey",
-      st.on_env and function()
-        st.on_env()
+      st.on_pwdebug and function()
+        st.on_pwdebug()
       end or nil,
     }
   else
@@ -153,44 +167,26 @@ end
 local STATE_WORD =
   { done = "done", running = "running", stale = "stale", failed = "failed", pending = "pending", ready = "ready" }
 
--- Distribute `rows` over `target` lines by spreading blank lines after rows
--- (even cumulative rounding) so short content still fills the pane height.
-local function distribute(rows, target)
-  local n = #rows
-  if target <= n then
-    return rows
+-- A loading-bar sweep for the process activity bars (0→100 by tick when alive).
+local function sweep_pct(alive, tick)
+  if not alive then
+    return 0
   end
-  local slack = target - n
-  local out = {}
-  for i, r in ipairs(rows) do
-    out[#out + 1] = r
-    local g = math.floor(slack * i / n) - math.floor(slack * (i - 1) / n)
-    for _ = 1, g do
-      out[#out + 1] = {}
-    end
-  end
-  return out
+  return (tick * 7) % 100
 end
 
-local function pad_str(s, w)
-  local d = vim.fn.strdisplaywidth(s)
-  if d >= w then
-    return s
-  end
-  return s .. string.rep(" ", w - d)
-end
-
--- Pipeline: a progress bar on top, then the steps as evenly-distributed rows
--- that fill the pane height. Each step leads with ✶ (▶ when focused) in the
--- Step column; the State column carries the status glyph + word (the running
--- step animates via the configured spinner). No inner border — the pane box is
--- the single frame.
-function M.pipeline_content(st, inner_w, height)
+-- Pipeline: a leading blank, a progress bar + count, then a bordered table
+-- (Step · State · Dur). The Step cell leads with ✶ (▶ when focused; the running
+-- step's star animates via the configured spinner); the State cell carries the
+-- status glyph + word.
+function M.pipeline_content(st, inner_w)
   local tasks = require("ledger.tasks")
   local hl = require("ledger.builder.ui.hl")
   local ui = require("volt.ui")
+  local spin = require("ledger.builder.ui.spin")
   inner_w = inner_w or 44
-  height = height or 14
+  local cfg = require("ledger.config").get().builder or {}
+  local step_spinner = (cfg.spinner and cfg.spinner.step) or "star"
   local steps = st.steps or {}
 
   local done = 0
@@ -209,18 +205,20 @@ function M.pipeline_content(st, inner_w, height)
   table.insert(bar, 1, { "  " })
   bar[#bar + 1] = { "  " .. done .. "/" .. #steps, "LedgerLabel" }
 
-  local dur_w, state_w = 7, 13
-  local step_w = math.max(10, inner_w - state_w - dur_w)
-
-  local step_rows = {}
+  local rows = { { " Step", "State", "Dur" } }
   for i, step in ipairs(steps) do
     local state = (st.statuses or {})[step.id] or "pending"
     local g, ghl = glyph(state, st.tick or 0, state == "running" and hl.pulse or nil)
     local focused = st.focus and st.focus.col == "pipeline" and st.focus.idx == i
-    local bullet = focused and "▶ " or "✶ "
-    local bullet_hl = focused and "LedgerBuilderKey" or "LedgerYellow0"
+    local bullet, bhl
+    if focused then
+      bullet, bhl = "▶", "LedgerBuilderKey"
+    elseif state == "running" then
+      bullet, bhl = spin.frame(step_spinner, st.tick or 0), "LedgerYellow0"
+    else
+      bullet, bhl = "✶", "LedgerYellow0"
+    end
     local opt = step.optional and " ○" or ""
-    local label = tostring(i) .. " " .. step.label .. opt
     local dur = "-"
     if step.template then
       local res = tasks.last_result(step.template)
@@ -228,17 +226,15 @@ function M.pipeline_content(st, inner_w, height)
         dur = fmt_dur(res.duration) or "-"
       end
     end
-    step_rows[#step_rows + 1] = {
-      { bullet, bullet_hl },
-      { pad_str(label, step_w - 2), "Normal" },
-      { g .. " ", ghl },
-      { pad_str(STATE_WORD[state] or state, state_w - 2), ghl },
-      { dur, "LedgerBuilderDim" },
+    rows[#rows + 1] = {
+      { { bullet .. " ", bhl }, { tostring(i) .. " " .. step.label .. opt, "Normal" } },
+      { { g .. " " .. (STATE_WORD[state] or state), ghl } },
+      dur,
     }
   end
 
-  local lines = { bar, {} }
-  for _, l in ipairs(distribute(step_rows, math.max(#step_rows, height - 2))) do
+  local lines = { {}, bar, {} } -- leading blank + progress bar + blank
+  for _, l in ipairs(ui.table(rows, inner_w, "LedgerTitle")) do
     lines[#lines + 1] = l
   end
   return lines
@@ -274,15 +270,12 @@ end
 -- and an activity bar animated with the configured spinner for alive procs.
 function M.processes_content(st, inner_w, height)
   local ui = require("volt.ui")
-  local spin = require("ledger.builder.ui.spin")
   inner_w = inner_w or 44
   height = height or 12
-  local cfg = require("ledger.config").get().builder or {}
-  local proc_spinner = (cfg.spinner and cfg.spinner.process) or "aesthetic"
   local procs = st.procs or {}
 
   if #procs == 0 then
-    local out = { { { "  (no processes for this platform)", "LedgerBuilderDim" } } }
+    local out = { {}, { { "  (no processes for this platform)", "LedgerBuilderDim" } } }
     while #out < height do
       out[#out + 1] = {}
     end
@@ -302,12 +295,12 @@ function M.processes_content(st, inner_w, height)
     if p.count and p.count > 0 then
       meta[#meta + 1] = p.count .. " ctr"
     end
-    local activity
-    if p.alive then
-      activity = { { spin.frame(proc_spinner, st.tick or 0), "LedgerBlue0" } }
-    else
-      activity = { { string.rep("▱", 7), "LedgerSeparator" } }
-    end
+    local activity = ui.progressbar({
+      w = math.max(6, col_inner - 2),
+      val = sweep_pct(p.alive, st.tick or 0),
+      icon = { on = "▰", off = "▱" },
+      hl = { on = p.alive and "LedgerBlue0" or "LedgerSeparator", off = "LedgerSeparator" },
+    })
 
     local body = {
       { { p.alive and "● running" or "○ down", state_hl } },
@@ -327,10 +320,11 @@ function M.processes_content(st, inner_w, height)
 
   local rows = tile(#procs)
   local R = #rows
-  local base = math.floor(height / R)
-  local extra = height - base * R
+  local avail = height - 1 -- reserve one line for the leading blank
+  local base = math.floor(avail / R)
+  local extra = avail - base * R
 
-  local out, idx = {}, 1
+  local out, idx = { {} }, 1 -- leading blank for breathing room
   for r = 1, R do
     local card_h = base + (r <= extra and 1 or 0)
     local ncol = rows[r]
@@ -450,9 +444,18 @@ local function stats_target(st)
   return st.platform == "desktop" and "desktop" or st.platform_flag
 end
 
+-- TEMP: seed empty Stats with per-target mock data when builder.mock_stats is on.
+local function mock_on()
+  return (require("ledger.config").get().builder or {}).mock_stats == true
+end
+
 function M.stats_history(st, inner_w)
   local history = require("ledger.builder.history")
-  local recent = history.recent(8, nil, stats_target(st))
+  local target = stats_target(st)
+  local recent = history.recent(8, nil, target)
+  if #recent == 0 and mock_on() then
+    recent = require("ledger.builder.mock").recent(target)
+  end
   if #recent == 0 then
     return { { { "no runs yet", "LedgerBuilderDim" } } }
   end
@@ -476,7 +479,11 @@ end
 function M.stats_buildtime(st, inner_w)
   local history = require("ledger.builder.history")
   local ui = require("volt.ui")
-  local durs = history.build_durations(12, stats_target(st))
+  local target = stats_target(st)
+  local durs = history.build_durations(12, target)
+  if #durs == 0 and mock_on() then
+    durs = require("ledger.builder.mock").build_durations(target)
+  end
   if #durs == 0 then
     return { { { "no builds yet", "LedgerBuilderDim" } } }
   end
@@ -513,7 +520,11 @@ end
 function M.stats_passrate(st, inner_w)
   local history = require("ledger.builder.history")
   local ui = require("volt.ui")
-  local rate, n = history.pass_rate(50, stats_target(st))
+  local target = stats_target(st)
+  local rate, n = history.pass_rate(50, target)
+  if not rate and mock_on() then
+    rate, n = require("ledger.builder.mock").pass_rate(target)
+  end
   if not rate then
     return { { { "no test runs yet", "LedgerBuilderDim" } } }
   end
@@ -542,18 +553,6 @@ function M.stats_content(st, inner_w)
   return lines
 end
 
--- Bottom-row indicator: which view (logs / stats) is showing; < / > switches.
-function M.bottom_indicator(st)
-  local logs_on = st.bottom ~= "stats"
-  return {
-    { "  " },
-    { " logs ", logs_on and "LedgerTabActive" or "LedgerTabInactive" },
-    { " " },
-    { " stats ", (not logs_on) and "LedgerTabActive" or "LedgerTabInactive" },
-    { "     < / > to switch", "LedgerBuilderDim" },
-  }
-end
-
 -- Wrong-folder banner (cwd is not inside a LedgerHQ-ledger-live checkout).
 function M.wrong_folder_content(cwd)
   return {
@@ -567,8 +566,23 @@ function M.wrong_folder_content(cwd)
   }
 end
 
--- Cheatsheet (the `?` overlay): every key, what it does, the command/purpose.
-function M.cheatsheet()
+-- Help tab bar (Shortcuts / Cheatsheet), highlighting the active tab.
+function M.help_tabs(st)
+  local active = st.help_tab or "shortcuts"
+  local function t(label, key)
+    return { " " .. label .. " ", active == key and "LedgerTabActive" or "LedgerTabInactive" }
+  end
+  return {
+    { "  " },
+    t("Shortcuts", "shortcuts"),
+    { " " },
+    t("Cheatsheet", "commands"),
+    { "      Tab switches", "LedgerBuilderDim" },
+  }
+end
+
+-- Shortcuts tab: every key, what it does, the command/purpose.
+function M.help_shortcuts()
   local function row(key, desc, detail)
     return {
       { "  " },
@@ -580,8 +594,7 @@ function M.cheatsheet()
   end
   return {
     { { "  Tabs / layout", "LedgerBuilderTitle" } },
-    row("Tab", "switch Desktop / Mobile"),
-    row("D / M", "desktop / mobile platform"),
+    row("Tab", "switch Desktop / Mobile", "(switches help tabs while help is open)"),
     row("i / a", "iOS / Android subtab (mobile)"),
     row("< / >", "bottom view", "Logs ▸ Stats (Pipeline+Processes always shown)"),
     {},
@@ -593,9 +606,10 @@ function M.cheatsheet()
     { { "  Actions", "LedgerBuilderTitle" } },
     row("⏎", "run focused step / toggle process", "→ background pnpm task"),
     row("r", "run tests", "All · spec file · by name · by ticket"),
-    row("B", "build", "→ build:testing / detox build"),
+    row("B", "build", "→ desktop build:* / detox e2e:build"),
     row("x / s", "kill / start focused process"),
-    row("e", "env dropdown", "desktop: PWDEBUG · mobile: detox config"),
+    row("e", "env dropdown", "desktop: build/MOCK · mobile: detox config"),
+    row("p", "toggle PWDEBUG (desktop)"),
     row("d", "Speculos device dropdown"),
     row("F", "fix / maintenance", "reinstall · iOS pods · clean"),
     row("R", "refresh staleness + liveness"),
@@ -604,6 +618,54 @@ function M.cheatsheet()
     row("?", "toggle this help"),
     row("q / Esc", "close"),
   }
+end
+
+-- Cheatsheet tab: curated per-command docs + the repo's package.json scripts
+-- grouped by section.
+function M.help_commands(st, inner_w)
+  local commands = require("ledger.builder.commands")
+  inner_w = inner_w or 100
+  local lines = {}
+  local function title(t)
+    lines[#lines + 1] = { { "  " .. t, "LedgerBuilderTitle" } }
+  end
+  local function item(a, b)
+    local cmd = b or ""
+    local budget = math.max(10, inner_w - 8 - vim.fn.strdisplaywidth(a))
+    if vim.fn.strdisplaywidth(cmd) > budget then
+      cmd = vim.fn.strcharpart(cmd, 0, budget - 1) .. "…"
+    end
+    lines[#lines + 1] = { { "    " }, { a, "LedgerBuilderKey" }, { "  " }, { cmd, "LedgerBuilderDim" } }
+  end
+
+  for _, sec in ipairs(commands.builder_docs(st.platform, st.platform_flag)) do
+    title(sec.title)
+    for _, it in ipairs(sec.items) do
+      item(it[1], it[2])
+    end
+    lines[#lines + 1] = {}
+  end
+
+  title("package.json scripts")
+  local groups = commands.parse_scripts(st.root)
+  if #groups == 0 then
+    lines[#lines + 1] = { { "    (no package.json at the repo root)", "LedgerBuilderDim" } }
+    return lines
+  end
+  local RELEVANT = { build = true, e2e = true, test = true, dev = true, clean = true, mobile = true, desktop = true }
+  for _, g in ipairs(groups) do
+    if RELEVANT[g.section] then
+      lines[#lines + 1] = { { "  " .. g.section .. ":", "LedgerYellow0" } }
+      for k, it in ipairs(g.items) do
+        if k > 6 then
+          lines[#lines + 1] = { { "      … (" .. (#g.items - 6) .. " more)", "LedgerBuilderDim" } }
+          break
+        end
+        item(it.name, it.cmd)
+      end
+    end
+  end
+  return lines
 end
 
 return M

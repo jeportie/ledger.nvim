@@ -73,7 +73,9 @@ M.android = {
 
 -- Ordered steps for a platform. desktop → M.desktop; mobile → M.ios or
 -- M.android per `opts.platform_flag`. Returns shallow copies so callers can
--- annotate without mutating the definitions.
+-- annotate without mutating the definitions. The `build` step follows the
+-- chosen env: mobile shows `e2e:build <config>`; desktop shows `build:<profile>`
+-- and runs `desktop.build.<profile>` (testing | staging).
 function M.steps(platform, opts)
   opts = opts or {}
   local list = M.desktop
@@ -83,6 +85,18 @@ function M.steps(platform, opts)
   local out = {}
   for _, s in ipairs(list) do
     out[#out + 1] = vim.tbl_extend("keep", {}, s)
+  end
+  for _, s in ipairs(out) do
+    if s.id == "build" then
+      if platform == "mobile" then
+        local cfg = opts.config or (opts.platform_flag == "android" and "android.emu.release" or "ios.sim.debug")
+        s.label = "e2e:build " .. cfg
+      else
+        local profile = opts.desktop_build or "testing"
+        s.label = "build:" .. profile
+        s.template = "desktop.build." .. profile
+      end
+    end
   end
   return out
 end

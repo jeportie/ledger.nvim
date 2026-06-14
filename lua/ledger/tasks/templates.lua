@@ -56,7 +56,8 @@ local function detox_test_cmd(opts)
 end
 
 -- Playwright test command. `opts.scope` ("all" | "file" | "name") + `opts.spec`
--- / `opts.name`; `opts.pwdebug` prefixes `PWDEBUG=1` to open the Inspector.
+-- / `opts.name`; `opts.pwdebug` prefixes `PWDEBUG=1` (Inspector); `opts.mock`
+-- prefixes `MOCK=1` (mocked device).
 local function pw_run_cmd(opts)
   local base = "pnpm e2e:desktop test:playwright"
   local scope = opts.scope or "all"
@@ -65,10 +66,14 @@ local function pw_run_cmd(opts)
   elseif scope == "name" and opts.name and opts.name ~= "" then
     base = base .. ' --grep "' .. opts.name .. '"'
   end
-  if opts.pwdebug then
-    base = "PWDEBUG=1 " .. base
+  local prefix = ""
+  if opts.mock then
+    prefix = "MOCK=1 " .. prefix
   end
-  return base
+  if opts.pwdebug then
+    prefix = prefix .. "PWDEBUG=1 "
+  end
+  return prefix .. base
 end
 
 -- The matrix. Order is roughly pipeline order per platform.

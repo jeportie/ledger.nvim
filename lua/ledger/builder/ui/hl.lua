@@ -106,6 +106,8 @@ function M.apply_float(ns)
     set("LedgerTab" .. tab, { fg = c, bg = mix(c, win_bg_col, 78), bold = true })
   end
   set("LedgerScan", { bg = mix(get_hl("ExBlue").fg, win_bg_col, 88) })
+  -- filled title-bar (rectangle bg) for the borderless window title
+  set("LedgerTitleBar", { fg = get_hl("ExBlue").fg, bg = mix(get_hl("ExBlue").fg, win_bg_col, 82), bold = true })
 end
 
 -- Pulse highlight name for a given tick (heartbeat 0→1→2→1→0…).

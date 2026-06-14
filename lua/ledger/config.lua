@@ -24,13 +24,15 @@ M.defaults = {
     loader = true, -- show the loader animation on open
     animation = "max", -- "max" | "tasteful" | "minimal" | "off"
     backdrop = true, -- dim the rest of the editor while open
+    -- TEMP (visual review only): seed the Stats panes with per-target mock data
+    -- when there's no real history yet. Set false / remove once the look is approved.
+    mock_stats = true,
     -- spinner.nvim patterns per role (see lua/ledger/builder/ui/spin.lua).
     -- Any name from require("spinner.pattern") works; falls back to dotsCircle.
     spinner = {
       loader = "dotsCircle", -- the loader float on open
-      process = "aesthetic", -- the activity bar on running process cards
       pipeline = "dots", -- the running-step glyph in the pipeline State column
-      -- the pipeline Step-column bullet is the static star "✶" (not animated)
+      step = "star", -- the pipeline Step-column bullet, animated while running
       -- "material" is reserved for a future spot (e.g. a footer build shimmer)
     },
   },

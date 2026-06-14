@@ -138,6 +138,22 @@ describe("ledger.builder.pipeline", function()
     local path = pipeline.resolve_artifact(build, ctx())
     assert.equals("/repo/apps/ledger-live-mobile/ios/build/x.app", path)
   end)
+
+  it("mobile build label reflects the chosen detox config", function()
+    local ios = pipeline.steps("mobile", { platform_flag = "ios", config = "ios.sim.release" })
+    assert.equals("e2e:build ios.sim.release", find(ios, "build").label)
+    local android = pipeline.steps("mobile", { platform_flag = "android", config = "android.emu.prerelease" })
+    assert.equals("e2e:build android.emu.prerelease", find(android, "build").label)
+  end)
+
+  it("desktop build step follows the chosen build profile", function()
+    local testing = find(pipeline.steps("desktop", { desktop_build = "testing" }), "build")
+    assert.equals("build:testing", testing.label)
+    assert.equals("desktop.build.testing", testing.template)
+    local staging = find(pipeline.steps("desktop", { desktop_build = "staging" }), "build")
+    assert.equals("build:staging", staging.label)
+    assert.equals("desktop.build.staging", staging.template)
+  end)
 end)
 
 describe("ledger.builder.proc.for_platform", function()
@@ -207,16 +223,17 @@ describe("ledger.builder.ui.panes", function()
 
   it("renders all pane content without error", function()
     is_lines(panes.header(fake))
-    is_lines(panes.pipeline_content(fake, 44, 14))
+    is_lines(panes.pipeline_content(fake, 44))
     is_lines(panes.processes_content(fake, 44, 12))
     is_lines(panes.logs_content(fake, 10))
     is_lines(panes.stats_content(fake, 40))
     is_lines(panes.stats_history(fake, 24))
     is_lines(panes.stats_buildtime(fake, 24))
     is_lines(panes.stats_passrate(fake, 24))
-    is_lines(panes.bottom_indicator(fake))
     is_lines(panes.wrong_folder_content("/home/u"))
-    is_lines(panes.cheatsheet())
+    is_lines(panes.help_tabs(fake))
+    is_lines(panes.help_shortcuts())
+    is_lines(panes.help_commands(fake, 80))
   end)
 
   it("wrong-folder banner shows the cwd path", function()
@@ -241,9 +258,19 @@ describe("ledger.builder.ui.panes", function()
     assert.is_nil(flat(desktop):find("Android", 1, true))
   end)
 
-  it("header shows a centered title when borderless", function()
-    -- config default border = false → the header carries the title itself
-    assert.is_truthy(flat(panes.header(fake)):find("Ledger Builder", 1, true))
+  it("header shows a filled title bar when borderless", function()
+    -- config default border = false → the header carries the title itself,
+    -- rendered as a full-width bar with the LedgerTitleBar group.
+    local lines = panes.header(fake)
+    local found_bar = false
+    for _, line in ipairs(lines) do
+      for _, seg in ipairs(line) do
+        if seg[2] == "LedgerTitleBar" and (seg[1] or ""):find("Ledger Builder", 1, true) then
+          found_bar = true
+        end
+      end
+    end
+    assert.is_true(found_bar)
   end)
 
   it("uses the per-tab active highlight groups", function()
@@ -263,22 +290,30 @@ describe("ledger.builder.ui.panes", function()
     assert.equals("LedgerTabIos", active_hl(panes.header(fake), "iOS"))
   end)
 
-  it("pipeline fills the pane height and uses the ✶ step bullet", function()
-    local lines = panes.pipeline_content(fake, 44, 16)
-    -- progress bar + blank + steps distributed to fill → exactly height lines
-    assert.equals(16, #lines)
-    -- the focused step (idx 2) leads with ▶; the others with ✶
+  it("pipeline renders a bordered table with the ✶ step bullet", function()
+    local lines = panes.pipeline_content(fake, 60)
     local s = flat(lines)
+    -- the restored voltui.table: a Step/State/Dur header + box borders
+    assert.is_truthy(s:find("Step", 1, true))
+    assert.is_truthy(s:find("State", 1, true))
+    assert.is_truthy(s:find("┌", 1, true)) -- table top border
+    -- the focused step (idx 2) leads with ▶; non-focused with ✶
     assert.is_truthy(s:find("✶", 1, true))
     assert.is_truthy(s:find("▶", 1, true))
   end)
 
-  it("pipeline fills the same height regardless of step count", function()
-    local few = vim.tbl_extend("force", {}, fake, {
-      steps = { { id = "a", label = "one" }, { id = "b", label = "two" } },
-      statuses = { a = "done", b = "pending" },
+  it("the running step's bullet animates with the tick", function()
+    -- a running step that is NOT focused → its bullet uses the (animated) spinner,
+    -- so the rendered row changes between ticks (pattern-agnostic: the test rtp
+    -- has no spinner.nvim, so this falls back to the builtin animated frames).
+    local f = vim.tbl_extend("force", {}, fake, {
+      steps = { { id = "r", label = "building" }, { id = "p", label = "pending" } },
+      statuses = { r = "running", p = "pending" },
+      focus = { col = "pipeline", idx = 2 }, -- focus the pending step, not the running one
     })
-    assert.equals(16, #panes.pipeline_content(few, 44, 16))
+    local t0 = flat(panes.pipeline_content(vim.tbl_extend("force", {}, f, { tick = 0 }), 60))
+    local t1 = flat(panes.pipeline_content(vim.tbl_extend("force", {}, f, { tick = 1 }), 60))
+    assert.are_not.equals(t0, t1)
   end)
 
   it("processes tile to fill the pane (2/3/4 → grid that fills height)", function()
@@ -298,6 +333,32 @@ describe("ledger.builder.ui.panes", function()
     for i = 1, 4 do
       assert.is_truthy(s:find("Proc" .. i, 1, true))
     end
+    -- the activity row is the (longer) progress bar, not a short spinner
+    assert.is_truthy(s:find("▰", 1, true) or s:find("▱", 1, true))
+  end)
+
+  it("help has two tabs and the cheatsheet lists package.json scripts", function()
+    -- tab bar shows both tabs (help_tabs returns a single line → wrap for flat)
+    local tabs = flat({ panes.help_tabs(fake) })
+    assert.is_truthy(tabs:find("Shortcuts", 1, true))
+    assert.is_truthy(tabs:find("Cheatsheet", 1, true))
+    -- shortcuts tab dropped D/M and gained p
+    local sc = flat(panes.help_shortcuts())
+    assert.is_nil(sc:find("desktop / mobile platform", 1, true))
+    assert.is_truthy(sc:find("PWDEBUG", 1, true))
+    -- commands tab includes curated builder docs (per active platform)
+    assert.is_truthy(flat(panes.help_commands(fake, 100)):find("Pipeline", 1, true))
+  end)
+
+  it("stats render mock data per target when history is empty", function()
+    require("ledger.config").setup({ builder = { mock_stats = true } })
+    local function target(p, f)
+      return vim.tbl_extend("force", {}, fake, { platform = p, platform_flag = f })
+    end
+    -- non-empty for each target (mock fallback), and not the empty placeholder
+    assert.is_nil(flat(panes.stats_history(target("desktop"), 30)):find("no runs yet", 1, true))
+    assert.is_nil(flat(panes.stats_history(target("mobile", "ios"), 30)):find("no runs yet", 1, true))
+    assert.is_nil(flat(panes.stats_history(target("mobile", "android"), 30)):find("no runs yet", 1, true))
   end)
 
   it("process popup content has command, log + action footer", function()
