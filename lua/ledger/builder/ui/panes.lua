@@ -178,6 +178,23 @@ function M.pipeline_content(st)
   return lines
 end
 
+-- An animated activity bar for a process: a moving filled block over a track
+-- when alive (motion = liveness), a dim empty track when down.
+local function activity_bar(alive, tick, width)
+  width = width or 16
+  if not alive then
+    return { { string.rep("▱", width), "LedgerBuilderDim" } }
+  end
+  local pos = (tick % width) + 1
+  local cells = {}
+  for j = 1, width do
+    local d = math.abs(j - pos)
+    cells[j] = (d == 0 and "▰") or (d == 1 and "▰") or "▱"
+  end
+  return { { table.concat(cells), "LedgerStateRunning" } }
+end
+
+-- Each process is a 2-line card: a status line and an animated activity line.
 function M.processes_content(st)
   local lines = {}
   for i, p in ipairs(st.procs or {}) do
@@ -190,18 +207,83 @@ function M.processes_content(st)
       end
       dot[3] = label_seg[3]
     end
+    -- line 1: focus gutter, dot, label, port/count/state
     local row = { focus_gutter(focused), dot, label_seg }
     if p.port then
       row[#row + 1] = { "  :" .. p.port, "LedgerBuilderDim" }
     end
     if p.count and p.count > 0 then
-      row[#row + 1] = { "  " .. p.count .. " ctr", "LedgerBuilderDim" }
+      row[#row + 1] = { "  " .. p.count .. " ctr", "LedgerStateDone" }
     end
-    if not p.alive then
-      row[#row + 1] = { "  down", "LedgerBuilderDim" }
-    end
+    row[#row + 1] = { p.alive and "  up" or "  down", p.alive and "LedgerStateDone" or "LedgerBuilderDim" }
     lines[#lines + 1] = row
+    -- line 2: animated activity bar
+    local bar = { { "    " } }
+    for _, seg in ipairs(activity_bar(p.alive, st.tick or 0, 16)) do
+      bar[#bar + 1] = seg
+    end
+    lines[#lines + 1] = bar
   end
+  return lines
+end
+
+-- Content for the per-process popup. `info` = { label, command, alive, port,
+-- count, uptime, log }.
+function M.process_popup_content(info)
+  local lines = {
+    {
+      { info.label, "LedgerBuilderTitle" },
+      { info.alive and "   ● running" or "   ○ down", info.alive and "LedgerStateDone" or "LedgerBuilderDim" },
+    },
+    {},
+    { { "command  ", "LedgerBuilderDim" }, { info.command or "—" } },
+  }
+  if info.port then
+    lines[#lines + 1] = { { "port     ", "LedgerBuilderDim" }, { ":" .. info.port } }
+  end
+  if info.count and info.count > 0 then
+    lines[#lines + 1] = { { "docker   ", "LedgerBuilderDim" }, { info.count .. " container(s)" } }
+  end
+  if info.uptime then
+    lines[#lines + 1] = { { "uptime   ", "LedgerBuilderDim" }, { info.uptime } }
+  end
+  lines[#lines + 1] = {}
+  lines[#lines + 1] = {
+    {
+      "── log ──────────────────────────────",
+      "LedgerBuilderDim",
+    },
+  }
+  local log = info.log or {}
+  if #log == 0 then
+    lines[#lines + 1] = { { "(no captured output)", "LedgerBuilderDim" } }
+  else
+    for _, l in ipairs(log) do
+      local txt = l:gsub("\t", "  ")
+      if #txt > 56 then
+        txt = txt:sub(1, 55) .. "…"
+      end
+      local hl = "LedgerBuilderDim"
+      if txt:match("[Ee]rror") or txt:match("✗") then
+        hl = "LedgerStateFailed"
+      elseif txt:match("✓") then
+        hl = "LedgerStateDone"
+      end
+      lines[#lines + 1] = { { txt, hl } }
+    end
+  end
+  lines[#lines + 1] = {}
+  lines[#lines + 1] = {
+    { "  " },
+    { "s", "LedgerBuilderKey" },
+    { " start   " },
+    { "x", "LedgerBuilderKey" },
+    { " kill   " },
+    { "R", "LedgerBuilderKey" },
+    { " restart   " },
+    { "q", "LedgerBuilderKey" },
+    { " close" },
+  }
   return lines
 end
 

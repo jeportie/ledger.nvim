@@ -228,9 +228,30 @@ describe("ledger.builder.ui.panes", function()
     assert.equals(#fake.steps, #lines)
   end)
 
-  it("processes shows one row per process", function()
+  it("processes render a 2-line card per process", function()
     local lines = panes.processes_content(fake)
-    assert.equals(#fake.procs, #lines)
+    assert.equals(#fake.procs * 2, #lines)
+  end)
+
+  it("process popup content has command, log + action footer", function()
+    local lines = panes.process_popup_content({
+      label = "Metro",
+      command = "pnpm dev:llm",
+      alive = true,
+      port = 8081,
+      uptime = "42s",
+      log = { "bundle 1823 modules", "error: boom" },
+    })
+    local joined = ""
+    for _, line in ipairs(lines) do
+      for _, seg in ipairs(line) do
+        joined = joined .. (seg[1] or "")
+      end
+    end
+    assert.is_truthy(joined:find("pnpm dev:llm", 1, true))
+    assert.is_truthy(joined:find(":8081", 1, true))
+    assert.is_truthy(joined:find("bundle 1823", 1, true))
+    assert.is_truthy(joined:find("restart", 1, true))
   end)
 
   it("box wraps content with a titled border of stable width", function()

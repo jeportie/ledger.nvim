@@ -312,22 +312,9 @@ local function activate()
     end
   elseif v == "processes" then
     local p = (state.procs or {})[state.focus_idx]
-    if not p then
-      return
+    if p then
+      M.proc_popup(p)
     end
-    local proc = require("ledger.builder.proc")
-    if p.alive then
-      proc.stop(p.name)
-    else
-      local ok, err = proc.start(p.name, { root = state.root })
-      if not ok then
-        vim.notify("Builder: " .. tostring(err), vim.log.levels.WARN)
-      end
-    end
-    vim.defer_fn(function()
-      refresh_runtime()
-      redraw("body")
-    end, 350)
   end
 end
 
@@ -352,6 +339,100 @@ local function proc_action(kind)
     refresh_runtime()
     redraw("body")
   end, 350)
+end
+
+-- Per-process popup: full info (command, port, uptime), log tail, and actions
+-- (s start / x kill / R restart / q close). Navigable with j/k.
+function M.proc_popup(p)
+  local proc = require("ledger.builder.proc")
+  local templates = require("ledger.tasks.templates")
+  local tasks = require("ledger.tasks")
+  local panes = require("ledger.builder.ui.panes")
+
+  local e = proc.by_name[p.name]
+  local command, log, uptime = nil, {}, nil
+  if e and e.start then
+    local spec = templates.resolve(e.start, { config = state.config, platform_flag = state.platform_flag }, state.root)
+    command = spec and spec.cmd
+    log = tasks.log_tail(e.start, 12)
+    local rec = tasks.tasks and tasks.tasks[e.start]
+    if rec and rec.started then
+      uptime = os.difftime(os.time(), rec.started) .. "s"
+    end
+  else
+    command = proc.detect_cmd(p.name) or "(started/detected externally)"
+  end
+
+  local content = panes.process_popup_content({
+    label = p.label,
+    command = command,
+    alive = p.alive,
+    port = p.port,
+    count = p.count,
+    uptime = uptime,
+    log = log,
+  })
+  local text = {}
+  for _, line in ipairs(content) do
+    local s = ""
+    for _, seg in ipairs(line) do
+      s = s .. (seg[1] or "")
+    end
+    text[#text + 1] = s
+  end
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, text)
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].bufhidden = "wipe"
+  local width = math.min(64, vim.o.columns - 4)
+  local height = math.min(#text, vim.o.lines - 6)
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = math.floor((vim.o.lines - height) / 2),
+    col = math.floor((vim.o.columns - width) / 2),
+    style = "minimal",
+    border = "rounded",
+    title = " " .. p.label .. " ",
+    title_pos = "center",
+    zindex = 260,
+  })
+  vim.wo[win].winhighlight = "Normal:LedgerBuilderNormal,FloatBorder:LedgerBuilderTitle"
+  vim.wo[win].cursorline = true
+
+  local function close()
+    if vim.api.nvim_win_is_valid(win) then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+  end
+  local function act(fn)
+    fn()
+    close()
+    vim.defer_fn(function()
+      refresh_runtime()
+      redraw("body")
+    end, 350)
+  end
+  local opts = { buffer = buf, nowait = true, silent = true }
+  vim.keymap.set("n", "q", close, opts)
+  vim.keymap.set("n", "<Esc>", close, opts)
+  vim.keymap.set("n", "s", function()
+    act(function()
+      proc.start(p.name, { root = state.root })
+    end)
+  end, opts)
+  vim.keymap.set("n", "x", function()
+    act(function()
+      proc.stop(p.name)
+    end)
+  end, opts)
+  vim.keymap.set("n", "R", function()
+    act(function()
+      proc.restart(p.name, { root = state.root })
+    end)
+  end, opts)
 end
 
 local function cycle_pane(delta)
