@@ -116,7 +116,16 @@ function M.header(st)
       end or nil,
     },
   }
-  if st.platform == "mobile" then
+  if st.platform == "desktop" then
+    meta[#meta + 1] = { "   PWDEBUG: ", "LedgerBuilderDim" }
+    meta[#meta + 1] = {
+      st.pwdebug or "0",
+      "LedgerBuilderKey",
+      st.on_env and function()
+        st.on_env()
+      end or nil,
+    }
+  else
     meta[#meta + 1] = { "   env: ", "LedgerBuilderDim" }
     meta[#meta + 1] = {
       st.config,

@@ -12,75 +12,77 @@
 
 local M = {}
 
--- Desktop pipeline (Playwright / Electron).
+-- Build-focused pipelines (running daemons live in the Processes pane, not
+-- here). `optional=true` steps (clean / install) are off by default and shown
+-- with a toggle; the controller's run-all only includes them when toggled on.
+
+-- Desktop (Playwright / Electron).
 M.desktop = {
-  { id = "deps", label = "deps installed", template = "desktop.install", artifact = "node_modules" },
-  { id = "libs", label = "libs + cli built", template = "desktop.build.deps" },
+  { id = "clean", label = "clean", template = "shared.clean", optional = true },
+  { id = "install", label = "install deps", template = "desktop.install", optional = true, artifact = "node_modules" },
+  { id = "cli", label = "build CLI", template = "desktop.build.cli" },
+  { id = "libs", label = "build:lld:deps", template = "desktop.build.deps" },
   {
     id = "build",
-    label = "testing build",
+    label = "build:testing",
     template = "desktop.build.testing",
     artifact = "apps/ledger-live-desktop/.webpack/main.bundle.js",
     sources = { "apps/ledger-live-desktop/src", "apps/ledger-live-desktop/tools" },
   },
-  { id = "pw_setup", label = "playwright browser", template = "desktop.pw.setup" },
-  { id = "run", label = "playwright run", template = "desktop.pw.run", kind = "test" },
-  { id = "report", label = "allure report", template = "desktop.allure", kind = "report" },
+  { id = "pw_setup", label = "playwright browser", template = "desktop.pw.setup", optional = true },
+  { id = "test", label = "playwright run", template = "desktop.pw.run", kind = "test" },
 }
 
--- Mobile pipeline. The native-build artifact depends on the active Detox
--- configuration, so `build.artifact` is resolved from ledger.detox.binary_paths
--- at status time (see resolve_artifact).
-M.mobile = {
-  { id = "deps", label = "deps installed", template = "mobile.install", artifact = "node_modules" },
-  { id = "libs", label = "libs + cli built", template = "mobile.build.deps" },
+-- iOS (Detox debug — needs pods + Metro at run time).
+M.ios = {
+  { id = "clean", label = "clean", template = "shared.clean", optional = true },
+  { id = "install", label = "install deps", template = "mobile.install", optional = true, artifact = "node_modules" },
+  { id = "cli", label = "build CLI", template = "mobile.build.cli" },
+  { id = "libs", label = "build:llm:deps", template = "mobile.build.deps" },
   {
     id = "pod",
-    label = "pods installed",
+    label = "pod install",
     template = "mobile.pod",
     artifact = "apps/ledger-live-mobile/ios/Podfile.lock",
-    ios_only = true,
   },
   {
     id = "build",
-    label = "native app built",
+    label = "e2e:build ios.sim.debug",
     template = "mobile.detox.build",
     artifact = "@detox-binary",
     sources = { "apps/ledger-live-mobile/src" },
   },
-  { id = "metro", label = "metro", template = "mobile.metro", proc = "metro", daemon = true },
-  { id = "device", label = "simulator / emulator", proc = "ios_sim", daemon = true },
-  { id = "test", label = "detox test", template = "mobile.detox.test", kind = "test" },
-  { id = "report", label = "allure report", template = "mobile.allure", kind = "report" },
+  { id = "test", label = "detox test (iOS)", template = "mobile.detox.test", kind = "test" },
 }
 
--- Ordered steps for a platform. `opts.config` selects the mobile build target;
--- `opts.platform_flag` ("ios"|"android") tweaks the device step proc.
+-- Android (Detox release — no pods, no Metro).
+M.android = {
+  { id = "clean", label = "clean", template = "shared.clean", optional = true },
+  { id = "install", label = "install deps", template = "mobile.install", optional = true, artifact = "node_modules" },
+  { id = "cli", label = "build CLI", template = "mobile.build.cli" },
+  { id = "libs", label = "build:llm:deps", template = "mobile.build.deps" },
+  {
+    id = "build",
+    label = "e2e:build android.emu.release",
+    template = "mobile.detox.build",
+    artifact = "@detox-binary",
+    sources = { "apps/ledger-live-mobile/src" },
+  },
+  { id = "test", label = "detox test (Android)", template = "mobile.detox.test", kind = "test" },
+}
+
+-- Ordered steps for a platform. desktop → M.desktop; mobile → M.ios or
+-- M.android per `opts.platform_flag`. Returns shallow copies so callers can
+-- annotate without mutating the definitions.
 function M.steps(platform, opts)
   opts = opts or {}
-  local list = platform == "mobile" and M.mobile or M.desktop
-  local android = opts.platform_flag == "android"
-  -- shallow copy so per-session resolution (device proc) doesn't mutate defs
+  local list = M.desktop
+  if platform == "mobile" then
+    list = opts.platform_flag == "android" and M.android or M.ios
+  end
   local out = {}
   for _, s in ipairs(list) do
-    -- iOS-only steps (pods) are dropped on Android
-    if not (s.ios_only and android) then
-      local step = vim.tbl_extend("keep", {}, s)
-      if step.id == "device" and android then
-        step.proc = "android_emu"
-        step.label = "emulator"
-      end
-      -- Android needs `adb reverse` (Metro + Detox bridge) before the test step
-      if step.id == "test" and android then
-        out[#out + 1] = {
-          id = "adb",
-          label = "adb reverse",
-          template = "shared.adb.reverse",
-          kind = "util",
-        }
-      end
-      out[#out + 1] = step
-    end
+    out[#out + 1] = vim.tbl_extend("keep", {}, s)
   end
   return out
 end

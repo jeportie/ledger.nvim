@@ -66,58 +66,43 @@ describe("ledger.builder.pipeline", function()
     }, over or {})
   end
 
-  it("desktop and mobile have ordered steps", function()
-    assert.is_true(#pipeline.steps("desktop") >= 5)
-    assert.equals("deps", pipeline.steps("desktop")[1].id)
-    assert.equals("report", pipeline.steps("mobile")[#pipeline.steps("mobile")].id)
-  end)
-
-  it("android swaps the device step proc", function()
-    local function device(steps)
-      for _, s in ipairs(steps) do
-        if s.id == "device" then
-          return s
-        end
+  local function find(steps, id)
+    for _, s in ipairs(steps) do
+      if s.id == id then
+        return s
       end
     end
-    assert.equals("ios_sim", device(pipeline.steps("mobile", { platform_flag = "ios" })).proc)
-    assert.equals("android_emu", device(pipeline.steps("mobile", { platform_flag = "android" })).proc)
+  end
+
+  it("desktop pipeline is build-focused and ends in test", function()
+    local steps = pipeline.steps("desktop")
+    assert.equals("clean", steps[1].id)
+    assert.equals("test", steps[#steps].id)
+    assert.is_truthy(find(steps, "cli"))
+    assert.is_truthy(find(steps, "build"))
+    assert.is_nil(find(steps, "pod")) -- desktop has no pods
   end)
 
-  it("daemon step status follows proc liveness", function()
-    local metro = pipeline.steps("mobile")[5]
-    assert.equals("metro", metro.id)
-    assert.equals(
-      "pending",
-      pipeline.status(
-        metro,
-        ctx({
-          proc_alive = function()
-            return false
-          end,
-        })
-      )
-    )
-    assert.equals(
-      "done",
-      pipeline.status(
-        metro,
-        ctx({
-          proc_alive = function()
-            return true
-          end,
-        })
-      )
-    )
+  it("iOS has pod install; Android does not (and neither carries Metro as a step)", function()
+    local ios = pipeline.steps("mobile", { platform_flag = "ios" })
+    local android = pipeline.steps("mobile", { platform_flag = "android" })
+    assert.is_truthy(find(ios, "pod"))
+    assert.is_nil(find(android, "pod"))
+    assert.is_nil(find(ios, "metro")) -- Metro is a process, not a pipeline step
+    assert.is_nil(find(android, "metro"))
+    assert.equals("test", ios[#ios].id)
+    assert.equals("test", android[#android].id)
+  end)
+
+  it("clean and install are optional steps", function()
+    local steps = pipeline.steps("desktop")
+    assert.is_true(find(steps, "clean").optional)
+    assert.is_true(find(steps, "install").optional)
+    assert.is_nil(find(steps, "build").optional)
   end)
 
   it("artifact step: pending / stale / done", function()
-    local build
-    for _, s in ipairs(pipeline.steps("mobile")) do
-      if s.id == "build" then
-        build = s
-      end
-    end
+    local build = find(pipeline.steps("mobile", { platform_flag = "ios" }), "build")
     assert.equals(
       "pending",
       pipeline.status(
@@ -143,21 +128,37 @@ describe("ledger.builder.pipeline", function()
     assert.equals("done", pipeline.status(build, ctx()))
   end)
 
-  it("step with no artifact/proc is ready", function()
-    local libs = pipeline.steps("desktop")[2]
-    assert.equals("libs", libs.id)
+  it("step with no artifact is ready", function()
+    local libs = find(pipeline.steps("desktop"), "libs")
     assert.equals("ready", pipeline.status(libs, ctx()))
   end)
 
   it("resolves the detox-binary sentinel via ctx", function()
-    local build
-    for _, s in ipairs(pipeline.steps("mobile")) do
-      if s.id == "build" then
-        build = s
-      end
-    end
+    local build = find(pipeline.steps("mobile", { platform_flag = "ios" }), "build")
     local path = pipeline.resolve_artifact(build, ctx())
     assert.equals("/repo/apps/ledger-live-mobile/ios/build/x.app", path)
+  end)
+end)
+
+describe("ledger.builder.proc.for_platform", function()
+  local proc = require("ledger.builder.proc")
+  local function names(list)
+    local out = {}
+    for _, n in ipairs(list) do
+      out[#out + 1] = n
+    end
+    return out
+  end
+  it("desktop = speculos + dev:lld (no metro)", function()
+    assert.same({ "speculos", "dev_lld" }, names(proc.names_for("desktop")))
+  end)
+  it("iOS includes metro", function()
+    assert.is_true(vim.tbl_contains(proc.names_for("mobile", "ios"), "metro"))
+    assert.is_true(vim.tbl_contains(proc.names_for("mobile", "ios"), "ios_sim"))
+  end)
+  it("Android excludes metro, includes emulator", function()
+    assert.is_false(vim.tbl_contains(proc.names_for("mobile", "android"), "metro"))
+    assert.is_true(vim.tbl_contains(proc.names_for("mobile", "android"), "android_emu"))
   end)
 end)
 

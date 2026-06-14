@@ -170,6 +170,30 @@ function M.status_all(runner)
   return out
 end
 
+-- The process names relevant to a platform/flag. Android does NOT use Metro
+-- (release bundle is embedded); desktop has no Metro/bridge/simulator.
+function M.names_for(platform, flag)
+  if platform == "desktop" then
+    return { "speculos", "dev_lld" }
+  elseif flag == "android" then
+    return { "bridge", "speculos", "android_emu" }
+  end
+  -- mobile / iOS
+  return { "metro", "bridge", "speculos", "ios_sim" }
+end
+
+-- Status of just the processes relevant to a platform/flag, in order.
+function M.for_platform(platform, flag, runner)
+  local out = {}
+  for _, name in ipairs(M.names_for(platform, flag)) do
+    local st = M.status(name, runner)
+    if st then
+      out[#out + 1] = st
+    end
+  end
+  return out
+end
+
 -- Stop a process (executes side effects). Returns true if a stop command ran.
 function M.stop(name, runner)
   runner = runner or default_runner

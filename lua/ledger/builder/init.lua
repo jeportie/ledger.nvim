@@ -19,14 +19,9 @@ local PROC_REFRESH_EVERY = 16 -- ticks (~2s) between process liveness polls
 local RING = { "pipeline", "processes", "logs", "stats" }
 local TITLES = { pipeline = "PIPELINE", processes = "PROCESSES", logs = "LOGS", stats = "STATS" }
 local DEVICES = { "nanoS", "nanoSP", "nanoX", "stax", "flex" }
-local CONFIGS = {
-  "ios.sim.debug",
-  "ios.sim.release",
-  "ios.sim.prerelease",
-  "android.emu.debug",
-  "android.emu.release",
-  "android.emu.prerelease",
-}
+local IOS_CONFIGS = { "ios.sim.debug", "ios.sim.release", "ios.sim.staging", "ios.sim.prerelease" }
+-- android.emu.debug is broken locally (Detox/Espresso) — release is the working path.
+local ANDROID_CONFIGS = { "android.emu.release", "android.emu.prerelease" }
 
 local state = nil
 
@@ -96,7 +91,7 @@ local function refresh_statuses()
   local detox = require("ledger.detox")
 
   state.steps = pipeline.steps(state.platform, { platform_flag = state.platform_flag })
-  state.procs = proc.status_all()
+  state.procs = proc.for_platform(state.platform, state.platform_flag)
   local alive = {}
   for _, p in ipairs(state.procs) do
     alive[p.name] = p.alive
@@ -134,7 +129,7 @@ local function refresh_runtime()
   end
   local proc = require("ledger.builder.proc")
   local tasks = require("ledger.tasks")
-  state.procs = proc.status_all()
+  state.procs = proc.for_platform(state.platform, state.platform_flag)
   for _, step in ipairs(state.steps or {}) do
     if step.template and tasks.is_running(step.template) then
       state.statuses[step.id] = "running"
@@ -198,6 +193,10 @@ local function sections()
         if state.help then
           return panes.box("HELP · cheatsheet", pad_to(panes.cheatsheet(), pane_h), state.full_inner)
         end
+        -- vertical (narrow screen): one pane, full width; Ctrl-t still cycles
+        if state.winlayout == "vertical" then
+          return render_view(left_view(), state.full_inner, pane_h)
+        end
         local left = render_view(left_view(), pane_inner, pane_h)
         local right = render_view(right_view(), pane_inner, pane_h)
         return ui.grid_col({
@@ -233,13 +232,21 @@ local function redraw(which)
   end
 end
 
+-- TyprStats-style sizing: single-pane ~80 wide, horizontal ~160; height a
+-- modest content height (not full-screen). Responsive: vertical single-pane
+-- when the screen is too narrow for two panes.
 local function compute_dims()
-  local W = math.min(vim.o.columns - 8, 180)
-  W = math.max(W, 80)
-  state.full_inner = W - 4
-  state.pane_inner = math.floor((W - 4) / 2) - 3
-  state.W = W
-  state.pane_h = math.max(10, math.floor(vim.o.lines * 0.85) - 9)
+  local horizontal = vim.o.columns > 170
+  state.winlayout = horizontal and "horizontal" or "vertical"
+  local W = horizontal and math.min(vim.o.columns - 6, 160) or math.min(vim.o.columns - 6, 84)
+  state.W = math.max(W, 76)
+  state.full_inner = state.W - 4
+  if horizontal then
+    state.pane_inner = math.floor((state.W - 4) / 2) - 3
+  else
+    state.pane_inner = state.full_inner
+  end
+  state.pane_h = math.max(10, math.min(18, vim.o.lines - 11))
 end
 
 -- Rebuild layout + buffer when section line counts change (tabs/subtab/pane/
@@ -298,7 +305,9 @@ local function activate()
   local v = focused_view()
   if v == "pipeline" then
     local step = (state.steps or {})[state.focus_idx]
-    if step and step.template then
+    if step and step.kind == "test" then
+      M.run_test()
+    elseif step and step.template then
       M.run_template(step.template)
     end
   elseif v == "processes" then
@@ -403,12 +412,144 @@ local function pick_device()
   end)
 end
 
+-- Env dropdown is platform-specific: desktop toggles PWDEBUG; mobile picks the
+-- detox configuration (iOS vs Android lists).
 local function pick_env()
-  open_menu("Detox configuration", CONFIGS, state.config, function(c)
-    state.config = c
-    state.platform_flag = c:match("^android") and "android" or "ios"
-    refresh_statuses()
-    rebuild()
+  if state.platform == "desktop" then
+    open_menu("PWDEBUG", { "PWDEBUG=0", "PWDEBUG=1" }, "PWDEBUG=" .. (state.pwdebug or "0"), function(c)
+      state.pwdebug = c:match("=(%d)")
+      redraw("all")
+    end)
+  else
+    local choices = state.platform_flag == "android" and ANDROID_CONFIGS or IOS_CONFIGS
+    open_menu("Detox configuration", choices, state.config, function(c)
+      state.config = c
+      refresh_statuses()
+      rebuild()
+    end)
+  end
+end
+
+-- ── run-a-test flow (All / Pick file / By name|ticket, with discovery) ───────
+
+local function specs_root()
+  if state.platform == "desktop" then
+    return state.root .. "/e2e/desktop/tests/specs", state.root .. "/e2e/desktop"
+  end
+  return state.root .. "/e2e/mobile/specs", state.root .. "/e2e/mobile"
+end
+
+local function do_run_test(scope_opts)
+  if not state.root then
+    return
+  end
+  local tasks = require("ledger.tasks")
+  local id = state.platform == "desktop" and "desktop.pw.run" or "mobile.detox.test"
+  local opts = vim.tbl_extend("force", {}, scope_opts or {})
+  if state.platform == "desktop" then
+    opts.pwdebug = state.pwdebug == "1"
+  else
+    opts.config = state.config
+    opts.platform_flag = state.platform_flag
+  end
+  tasks.run(id, opts)
+  vim.defer_fn(function()
+    refresh_runtime()
+    redraw("body")
+  end, 250)
+end
+
+local function pick_spec_file()
+  local dir, base = specs_root()
+  local files = vim.fs.find(function(name)
+    return name:match("%.spec%.ts$") ~= nil
+  end, { path = dir, type = "file", limit = 1000 })
+  if #files == 0 then
+    vim.notify("Builder: no spec files under " .. dir, vim.log.levels.WARN)
+    return
+  end
+  local rels = {}
+  for _, f in ipairs(files) do
+    rels[#rels + 1] = f:gsub("^" .. vim.pesc(base .. "/"), "")
+  end
+  table.sort(rels)
+  vim.ui.select(rels, { prompt = "Spec file" }, function(sel)
+    if not sel then
+      return
+    end
+    -- Playwright matches a basename substring; Detox uses --testPathPattern path
+    local spec = state.platform == "desktop" and vim.fn.fnamemodify(sel, ":t") or sel
+    do_run_test({ scope = "file", spec = spec })
+  end)
+end
+
+local function pick_test_name()
+  local dir = specs_root()
+  local names = {}
+  local ok, res = pcall(function()
+    return vim.system({ "rg", "--no-filename", "--no-line-number", "-o", "B2CQA-\\d+", dir }, { text = true }):wait()
+  end)
+  if ok and res and res.code == 0 and res.stdout then
+    local seen = {}
+    for tok in res.stdout:gmatch("B2CQA%-%d+") do
+      if not seen[tok] then
+        seen[tok] = true
+        names[#names + 1] = tok
+      end
+    end
+    table.sort(names)
+  end
+  names[#names + 1] = "✎ type a name / grep…"
+  vim.ui.select(names, { prompt = "Test name / ticket" }, function(sel)
+    if not sel then
+      return
+    end
+    if sel:match("^✎") then
+      vim.ui.input({ prompt = "Name / grep: " }, function(input)
+        if input and input ~= "" then
+          do_run_test({ scope = "name", name = input })
+        end
+      end)
+    else
+      do_run_test({ scope = "name", name = sel })
+    end
+  end)
+end
+
+function M.run_test()
+  if not state.root then
+    return
+  end
+  open_menu("Run tests", { "All tests", "Pick spec file…", "By name / ticket…" }, nil, function(choice)
+    if choice == "All tests" then
+      do_run_test({ scope = "all" })
+    elseif choice == "Pick spec file…" then
+      pick_spec_file()
+    else
+      pick_test_name()
+    end
+  end)
+end
+
+-- ── fix / maintenance menu ────────────────────────────────────────────────────
+
+local function fix_menu()
+  local items = { { label = "Global fix (reinstall node_modules + store)", id = "fix.global" } }
+  if state.platform == "mobile" and state.platform_flag == "ios" then
+    items[#items + 1] = { label = "iOS pod fix (reset Pods)", id = "fix.ios_pod" }
+  end
+  items[#items + 1] = { label = "Clean (git clean -fdX)", id = "shared.clean" }
+  local labels = {}
+  local by_label = {}
+  for _, it in ipairs(items) do
+    labels[#labels + 1] = it.label
+    by_label[it.label] = it.id
+  end
+  open_menu("Fix / maintenance", labels, nil, function(choice)
+    local id = by_label[choice]
+    if id then
+      require("ledger.tasks").run(id)
+    end
   end)
 end
 
@@ -495,12 +636,13 @@ local function set_keymaps()
     redraw("body")
   end
 
-  for _, k in ipairs({ "j", "<Down>", "<Tab>" }) do
+  -- within-column nav (Tab is now the platform switch, see below)
+  for _, k in ipairs({ "j", "<Down>" }) do
     map(k, function()
       move(1)
     end)
   end
-  for _, k in ipairs({ "k", "<Up>", "<S-Tab>" }) do
+  for _, k in ipairs({ "k", "<Up>" }) do
     map(k, function()
       move(-1)
     end)
@@ -515,6 +657,12 @@ local function set_keymaps()
       side("left")
     end)
   end
+  -- Tab / Shift-Tab toggle Desktop ↔ Mobile
+  local function toggle_platform()
+    set_platform(state.platform == "desktop" and "mobile" or "desktop")
+  end
+  map("<Tab>", toggle_platform)
+  map("<S-Tab>", toggle_platform)
   map("<C-t>", function()
     cycle_pane(1)
   end)
@@ -528,6 +676,8 @@ local function set_keymaps()
   map("B", function()
     M.run_step_by_id("build")
   end)
+  map("r", M.run_test)
+  map("F", fix_menu)
   map("R", function()
     refresh_statuses()
     redraw("all")
@@ -548,13 +698,7 @@ local function set_keymaps()
       set_subplatform("android")
     end
   end)
-  map("e", function()
-    if state.platform == "mobile" then
-      pick_env()
-    else
-      pick_device()
-    end
-  end)
+  map("e", pick_env)
   map("?", toggle_help)
   map("q", M.close)
   map("<Esc>", M.close)
@@ -582,6 +726,7 @@ function M.open()
     platform = "desktop",
     platform_flag = "ios",
     config = default_config("ios"),
+    pwdebug = "0",
     tick = 0,
     root = root,
     help = false,
