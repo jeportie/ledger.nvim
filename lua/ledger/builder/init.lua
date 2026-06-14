@@ -377,20 +377,63 @@ local function set_subplatform(flag)
   rebuild()
 end
 
--- Focused, navigable dropdown via vim.ui.select (the user's config routes this
--- to the snacks picker: fuzzy, j/k-navigable, q/Esc closes). We avoid
--- nvzone/menu here because its keyboard mode requires a per-item keybind.
+-- A tiny cursor-based dropdown float (no search bar): j/k/arrows move the
+-- cursor, <CR> picks the highlighted line, q/<Esc> closes. Focus returns to the
+-- builder on close. Chosen over vim.ui.select (snacks) which adds an unwanted
+-- search prompt, and over nvzone/menu's keyboard mode (needs per-item keybinds).
 local function open_menu(title, choices, current, on_pick)
-  vim.ui.select(choices, {
-    prompt = title,
-    format_item = function(c)
-      return (c == current and "● " or "  ") .. c
-    end,
-  }, function(c)
-    if c then
-      on_pick(c)
+  if not choices or #choices == 0 then
+    return
+  end
+  local buf = vim.api.nvim_create_buf(false, true)
+  local width = vim.fn.strdisplaywidth(title) + 2
+  local cur_line = 1
+  local lines = {}
+  for i, c in ipairs(choices) do
+    local marked = (c == current)
+    lines[i] = (marked and " ● " or "   ") .. c
+    if marked then
+      cur_line = i
     end
-  end)
+    width = math.max(width, vim.fn.strdisplaywidth(lines[i]) + 2)
+  end
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].bufhidden = "wipe"
+
+  local height = math.min(#choices, math.max(1, vim.o.lines - 6))
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    width = math.min(width, vim.o.columns - 4),
+    height = height,
+    row = math.floor((vim.o.lines - height) / 2),
+    col = math.floor((vim.o.columns - width) / 2),
+    style = "minimal",
+    border = "rounded",
+    title = " " .. title .. " ",
+    title_pos = "center",
+    zindex = 250,
+  })
+  vim.wo[win].cursorline = true
+  pcall(vim.api.nvim_win_set_cursor, win, { cur_line, 0 })
+
+  local function close()
+    if vim.api.nvim_win_is_valid(win) then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+  end
+  local function pick()
+    local row = vim.api.nvim_win_get_cursor(win)[1]
+    close()
+    local choice = choices[row]
+    if choice then
+      on_pick(choice)
+    end
+  end
+  local opts = { buffer = buf, nowait = true, silent = true }
+  vim.keymap.set("n", "<CR>", pick, opts)
+  vim.keymap.set("n", "q", close, opts)
+  vim.keymap.set("n", "<Esc>", close, opts)
 end
 
 local function pick_device()
@@ -473,41 +516,37 @@ local function pick_spec_file()
   end)
 end
 
+-- Run rg with the given args, calling on_line for each output line.
+local function rg_lines(args, on_line)
+  local ok, res = pcall(function()
+    return vim.system(args, { text = true }):wait()
+  end)
+  if ok and res and res.code == 0 and res.stdout then
+    for line in res.stdout:gmatch("[^\r\n]+") do
+      on_line(line)
+    end
+  end
+end
+
+local function target_label()
+  return state.platform == "desktop" and "desktop" or state.platform_flag
+end
+
+-- Pick by test NAME: it()/test() titles in the target's specs. Multiline -U so
+-- desktop Playwright (title on the line after `test(`) is captured too.
 local function pick_test_name()
   local dir = specs_root()
   local names, seen = {}, {}
-  local function add(tok)
-    tok = tok and tok:gsub("%s+$", "") or ""
-    if tok ~= "" and not seen[tok] then
-      seen[tok] = true
-      names[#names + 1] = tok
-    end
-  end
-  local function rg(args, gather)
-    local ok, res = pcall(function()
-      return vim.system(args, { text = true }):wait()
-    end)
-    if ok and res and res.code == 0 and res.stdout then
-      gather(res.stdout)
-    end
-  end
-  -- B2CQA tickets
-  rg({ "rg", "--no-filename", "-o", "B2CQA-\\d+", dir }, function(out)
-    for tok in out:gmatch("B2CQA%-%d+") do
-      add(tok)
-    end
-  end)
-  -- it("…") / test("…") titles (Playwright + Detox): grep matching lines, then
-  -- capture the first quoted string per line in Lua (robust across rg versions).
-  rg({ "rg", "--no-filename", "-N", [[\b(it|test)\(]], dir }, function(out)
-    for line in out:gmatch("[^\r\n]+") do
-      local title = line:match("[\"'`]([^\"'`]+)")
-      add(title)
+  rg_lines({ "rg", "-U", "--no-filename", "-o", "-r", "$1", [[(?:it|test)\(\s*['"`]([^'"`]+)]], dir }, function(line)
+    local t = line:gsub("^%s+", ""):gsub("%s+$", "")
+    if t ~= "" and t:match("%a") and not seen[t] then
+      seen[t] = true
+      names[#names + 1] = t
     end
   end)
   table.sort(names)
   names[#names + 1] = "✎ type a name / grep…"
-  vim.ui.select(names, { prompt = "Test name / ticket" }, function(sel)
+  vim.ui.select(names, { prompt = "Test name (" .. target_label() .. ")" }, function(sel)
     if not sel then
       return
     end
@@ -523,17 +562,43 @@ local function pick_test_name()
   end)
 end
 
+-- Pick by TICKET: B2CQA-#### referenced in the target's specs.
+local function pick_ticket()
+  local dir = specs_root()
+  local tickets, seen = {}, {}
+  rg_lines({ "rg", "--no-filename", "-o", "B2CQA-\\d+", dir }, function(line)
+    for tok in line:gmatch("B2CQA%-%d+") do
+      if not seen[tok] then
+        seen[tok] = true
+        tickets[#tickets + 1] = tok
+      end
+    end
+  end)
+  table.sort(tickets)
+  if #tickets == 0 then
+    vim.notify("Builder: no B2CQA tickets found in " .. target_label() .. " specs", vim.log.levels.WARN)
+    return
+  end
+  vim.ui.select(tickets, { prompt = "Ticket (" .. target_label() .. ")" }, function(sel)
+    if sel then
+      do_run_test({ scope = "name", name = sel })
+    end
+  end)
+end
+
 function M.run_test()
   if not state.root then
     return
   end
-  open_menu("Run tests", { "All tests", "Pick spec file…", "By name / ticket…" }, nil, function(choice)
+  open_menu("Run tests", { "All tests", "Pick spec file…", "By test name…", "By ticket…" }, nil, function(choice)
     if choice == "All tests" then
       do_run_test({ scope = "all" })
     elseif choice == "Pick spec file…" then
       pick_spec_file()
-    else
+    elseif choice == "By test name…" then
       pick_test_name()
+    else
+      pick_ticket()
     end
   end)
 end
