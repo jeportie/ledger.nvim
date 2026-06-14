@@ -377,32 +377,20 @@ local function set_subplatform(flag)
   rebuild()
 end
 
+-- Focused, navigable dropdown via vim.ui.select (the user's config routes this
+-- to the snacks picker: fuzzy, j/k-navigable, q/Esc closes). We avoid
+-- nvzone/menu here because its keyboard mode requires a per-item keybind.
 local function open_menu(title, choices, current, on_pick)
-  local ok, menu = pcall(require, "menu")
-  if not ok then
-    vim.ui.select(choices, { prompt = title }, function(c)
-      if c then
-        on_pick(c)
-      end
-    end)
-    return
-  end
-  pcall(function()
-    require("menu.utils").delete_old_menus()
+  vim.ui.select(choices, {
+    prompt = title,
+    format_item = function(c)
+      return (c == current and "● " or "  ") .. c
+    end,
+  }, function(c)
+    if c then
+      on_pick(c)
+    end
   end)
-  local items = {}
-  for _, c in ipairs(choices) do
-    items[#items + 1] = {
-      name = "  " .. c,
-      rtxt = c == current and "●" or "",
-      cmd = function()
-        on_pick(c)
-      end,
-    }
-  end
-  -- mouse=false → the menu window is focused and navigable (j/k/arrows, Enter)
-  -- and q/Esc closes it.
-  menu.open(items, { mouse = false })
 end
 
 local function pick_device()
@@ -509,10 +497,12 @@ local function pick_test_name()
       add(tok)
     end
   end)
-  -- it("…") / test("…") titles (Playwright + Detox), captured via -r '$1'
-  rg({ "rg", "--no-filename", "-o", "-r", "$1", [[(?:it|test)\(['"`]([^'"`]+)]], dir }, function(out)
+  -- it("…") / test("…") titles (Playwright + Detox): grep matching lines, then
+  -- capture the first quoted string per line in Lua (robust across rg versions).
+  rg({ "rg", "--no-filename", "-N", [[\b(it|test)\(]], dir }, function(out)
     for line in out:gmatch("[^\r\n]+") do
-      add(line)
+      local title = line:match("[\"'`]([^\"'`]+)")
+      add(title)
     end
   end)
   table.sort(names)
