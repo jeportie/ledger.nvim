@@ -771,6 +771,7 @@ local function set_keymaps()
     end
   end)
   map("e", pick_env)
+  map("d", pick_device)
   map("?", toggle_help)
   map("q", M.close)
   map("<Esc>", M.close)
