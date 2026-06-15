@@ -19,7 +19,7 @@ M.defaults = {
     env_var = "SEED",
   },
   builder = {
-    border = false, -- no window border by default (set true for "single")
+    border = true, -- single window border (carries no title); false = borderless + title bar
     transparent = false, -- opaque panel by default; true = see-through
     loader = true, -- show the loader animation on open
     animation = "max", -- "max" | "tasteful" | "minimal" | "off"

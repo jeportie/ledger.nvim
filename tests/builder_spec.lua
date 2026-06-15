@@ -101,10 +101,10 @@ describe("ledger.builder.pipeline", function()
     assert.is_nil(find(steps, "build").optional)
   end)
 
-  it("artifact step: pending / stale / done", function()
+  it("artifact step: missing / needs_update / done", function()
     local build = find(pipeline.steps("mobile", { platform_flag = "ios" }), "build")
     assert.equals(
-      "pending",
+      "missing",
       pipeline.status(
         build,
         ctx({
@@ -115,7 +115,7 @@ describe("ledger.builder.pipeline", function()
       )
     )
     assert.equals(
-      "stale",
+      "needs_update",
       pipeline.status(
         build,
         ctx({
@@ -128,9 +128,50 @@ describe("ledger.builder.pipeline", function()
     assert.equals("done", pipeline.status(build, ctx()))
   end)
 
-  it("step with no artifact is ready", function()
+  it("no-artifact step uses last_ok: done if the last run succeeded, else missing", function()
     local libs = find(pipeline.steps("desktop"), "libs")
-    assert.equals("ready", pipeline.status(libs, ctx()))
+    assert.equals("missing", pipeline.status(libs, ctx())) -- no last_ok → never run
+    assert.equals(
+      "missing",
+      pipeline.status(
+        libs,
+        ctx({
+          last_ok = function()
+            return false
+          end,
+        })
+      )
+    )
+    assert.equals(
+      "done",
+      pipeline.status(
+        libs,
+        ctx({
+          last_ok = function()
+            return true
+          end,
+        })
+      )
+    )
+  end)
+
+  it("target_state: not_ready / in_progress / ready over the step set", function()
+    local steps = pipeline.steps("desktop")
+    local function all(s)
+      local m = {}
+      for _, step in ipairs(steps) do
+        m[step.id] = s
+      end
+      return m
+    end
+    -- everything done (optional steps don't block ready)
+    local done = all("done")
+    done.clean, done.install = "missing", "missing"
+    assert.equals("ready", pipeline.target_state(steps, done))
+    assert.equals("not_ready", pipeline.target_state(steps, all("missing")))
+    local running = all("done")
+    running.build = "in_progress"
+    assert.equals("in_progress", pipeline.target_state(steps, running))
   end)
 
   it("resolves the detox-binary sentinel via ctx", function()
@@ -258,19 +299,23 @@ describe("ledger.builder.ui.panes", function()
     assert.is_nil(flat(desktop):find("Android", 1, true))
   end)
 
-  it("header shows a filled title bar when borderless", function()
-    -- config default border = false → the header carries the title itself,
-    -- rendered as a full-width bar with the LedgerTitleBar group.
-    local lines = panes.header(fake)
-    local found_bar = false
-    for _, line in ipairs(lines) do
-      for _, seg in ipairs(line) do
-        if seg[2] == "LedgerTitleBar" and (seg[1] or ""):find("Ledger Builder", 1, true) then
-          found_bar = true
+  it("shows a filled title bar only when borderless", function()
+    local function has_title_bar(lines)
+      for _, line in ipairs(lines) do
+        for _, seg in ipairs(line) do
+          if seg[2] == "LedgerTitleBar" and (seg[1] or ""):find("Ledger Builder", 1, true) then
+            return true
+          end
         end
       end
+      return false
     end
-    assert.is_true(found_bar)
+    -- borderless → the header carries the title as a full-width LedgerTitleBar
+    require("ledger.config").setup({ builder = { border = false } })
+    assert.is_true(has_title_bar(panes.header(fake)))
+    -- with a border (the default) → no in-content title (the border carries it)
+    require("ledger.config").setup({ builder = { border = true } })
+    assert.is_false(has_title_bar(panes.header(fake)))
   end)
 
   it("uses the per-tab active highlight groups", function()
@@ -308,12 +353,68 @@ describe("ledger.builder.ui.panes", function()
     -- has no spinner.nvim, so this falls back to the builtin animated frames).
     local f = vim.tbl_extend("force", {}, fake, {
       steps = { { id = "r", label = "building" }, { id = "p", label = "pending" } },
-      statuses = { r = "running", p = "pending" },
+      statuses = { r = "in_progress", p = "missing" },
       focus = { col = "pipeline", idx = 2 }, -- focus the pending step, not the running one
     })
     local t0 = flat(panes.pipeline_content(vim.tbl_extend("force", {}, f, { tick = 0 }), 60))
     local t1 = flat(panes.pipeline_content(vim.tbl_extend("force", {}, f, { tick = 1 }), 60))
     assert.are_not.equals(t0, t1)
+  end)
+
+  it("pipeline shows the target-state line and the 4 state words", function()
+    local f = vim.tbl_extend("force", {}, fake, {
+      platform = "desktop",
+      steps = {
+        { id = "a", label = "x" },
+        { id = "b", label = "y" },
+        { id = "c", label = "z" },
+        { id = "d", label = "w" },
+      },
+      statuses = { a = "done", b = "in_progress", c = "needs_update", d = "missing" },
+    })
+    local s = flat(panes.pipeline_content(f, 60))
+    assert.is_truthy(s:find("desktop ·", 1, true)) -- global target-state line
+    assert.is_truthy(s:find("done", 1, true))
+    assert.is_truthy(s:find("in progress", 1, true))
+    assert.is_truthy(s:find("needs update", 1, true))
+    assert.is_truthy(s:find("missing", 1, true))
+  end)
+
+  it("logs truncate to the box width (not 50) and honor the scroll offset", function()
+    local tasks = require("ledger.tasks")
+    tasks.tasks["spec.logtest"] = { lines = {}, running = false }
+    for i = 1, 30 do
+      tasks.tasks["spec.logtest"].lines[i] = "line" .. i .. " " .. string.rep("z", 100)
+    end
+    local f = vim.tbl_extend("force", {}, fake, {
+      steps = { { id = "x", label = "x", template = "spec.logtest" } },
+      focus = { col = "pipeline", idx = 1 },
+      log_offset = 0,
+    })
+    local ui = require("volt.ui")
+    for _, l in ipairs(panes.logs_content(f, 6, 40)) do
+      assert.is_true(ui.line_w(l) <= 40) -- fits the passed width, not a hardcoded 50
+    end
+    assert.is_truthy(flat(panes.logs_content(f, 6, 120)):find("line30", 1, true)) -- tail
+    f.log_offset = 20
+    assert.is_truthy(flat(panes.logs_content(f, 6, 120)):find("line10", 1, true)) -- scrolled up
+    tasks.tasks["spec.logtest"] = nil
+  end)
+
+  it("stats panes start with a blank line and the chart fills the card", function()
+    require("ledger.config").setup({ builder = { mock_stats = true } })
+    assert.same({}, panes.stats_history(fake, 30)[1])
+    assert.same({}, panes.stats_buildtime(fake, 30)[1])
+    assert.same({}, panes.stats_passrate(fake, 30)[1])
+    local ui = require("volt.ui")
+    local function maxw(lines)
+      local m = 0
+      for _, l in ipairs(lines) do
+        m = math.max(m, ui.line_w(l))
+      end
+      return m
+    end
+    assert.is_true(maxw(panes.stats_buildtime(fake, 60)) > maxw(panes.stats_buildtime(fake, 24)))
   end)
 
   it("processes tile to fill the pane (2/3/4 → grid that fills height)", function()

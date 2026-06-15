@@ -116,11 +116,21 @@ local function refresh_statuses()
     proc_alive = function(name)
       return alive[name] or false
     end,
+    last_ok = function(tmpl)
+      if not tmpl then
+        return nil
+      end
+      local r = tasks.last_result(tmpl)
+      if not r then
+        return nil
+      end
+      return r.code == 0
+    end,
   }
   state.statuses = {}
   for _, step in ipairs(state.steps) do
     if step.template and tasks.is_running(step.template) then
-      state.statuses[step.id] = "running"
+      state.statuses[step.id] = "in_progress"
     else
       state.statuses[step.id] = pipeline.status(step, ctx)
     end
@@ -135,12 +145,18 @@ local function refresh_runtime()
   local proc = require("ledger.builder.proc")
   local tasks = require("ledger.tasks")
   state.procs = proc.for_platform(state.platform, state.platform_flag)
+  local finished = false
   for _, step in ipairs(state.steps or {}) do
-    if step.template and tasks.is_running(step.template) then
-      state.statuses[step.id] = "running"
-    elseif state.statuses[step.id] == "running" then
-      state.statuses[step.id] = "ready"
+    if step.template then
+      if tasks.is_running(step.template) then
+        state.statuses[step.id] = "in_progress"
+      elseif state.statuses[step.id] == "in_progress" then
+        finished = true -- a running step just finished → re-evaluate artifacts
+      end
     end
+  end
+  if finished then
+    refresh_statuses()
   end
 end
 
@@ -162,7 +178,7 @@ local function render_view(view, inner_w, height)
   elseif view == "processes" then
     content = panes.processes_content(state, inner_w, height)
   elseif view == "logs" then
-    content = panes.logs_content(state, height)
+    content = panes.logs_content(state, height, inner_w)
   else
     content = panes.stats_content(state, inner_w)
   end
@@ -299,15 +315,15 @@ local function compute_dims()
   else
     state.pane_inner = state.full_inner
   end
-  -- top_h fits the pipeline: leading blank + bar + blank (3) + voltui.table
-  -- (1 top border + 2 lines per row, rows = header + steps).
+  -- top_h fits the pipeline: blank + target-state line + bar + blank (4) +
+  -- voltui.table (1 top border + 2 lines per row, rows = header + steps).
   local pl = require("ledger.builder.pipeline")
   local max_steps = math.max(
     #pl.steps("desktop"),
     #pl.steps("mobile", { platform_flag = "ios" }),
     #pl.steps("mobile", { platform_flag = "android" })
   )
-  state.top_h = 3 + (1 + 2 * (max_steps + 1))
+  state.top_h = 4 + (1 + 2 * (max_steps + 1))
   -- chrome ≈ header(6) + top borders(2) + separator(1) + bottom borders(2) + footer(1) + margin
   state.bottom_h = math.max(8, math.min(16, vim.o.lines - state.top_h - 13))
   -- shared row width so the logs/stats row aligns exactly with the top row:
@@ -337,20 +353,24 @@ end
 
 -- ── actions ──────────────────────────────────────────────────────────────────
 
-function M.run_template(template)
+function M.run_template(template, extra)
   if not state.root then
     return
   end
   local tasks = require("ledger.tasks")
-  local opts = { root = state.root }
+  local opts = vim.tbl_extend("force", { root = state.root }, extra or {})
   if state.platform == "mobile" then
     opts.config = state.config
     opts.platform_flag = state.platform_flag
+  else
+    opts.pwdebug = state.pwdebug == "1"
+    opts.mock = state.mock == "1"
   end
+  state.log_offset = 0 -- jump logs back to newest output
   tasks.run(template, opts)
   vim.defer_fn(function()
-    refresh_runtime()
-    redraw("body")
+    refresh_statuses()
+    redraw("all")
   end, 250)
 end
 
@@ -655,10 +675,11 @@ local function do_run_test(scope_opts)
     opts.config = state.config
     opts.platform_flag = state.platform_flag
   end
+  state.log_offset = 0
   tasks.run(id, opts)
   vim.defer_fn(function()
-    refresh_runtime()
-    redraw("body")
+    refresh_statuses()
+    redraw("all")
   end, 250)
 end
 
@@ -880,10 +901,84 @@ end
 
 -- ── keymaps ───────────────────────────────────────────────────────────────────
 
+-- Run every step for the target in order, chaining on success and stopping on
+-- the first failure. `include` selects the optional clean/install steps.
+local function run_all(include)
+  if not state.root then
+    return
+  end
+  local seq = {}
+  for _, step in ipairs(state.steps or {}) do
+    if step.template then
+      local gated = step.id == "clean" or step.id == "install"
+      if not gated or include[step.id] then
+        seq[#seq + 1] = step
+      end
+    end
+  end
+  local function run_at(i)
+    if i > #seq then
+      vim.notify("Builder: run-all complete ✓", vim.log.levels.INFO)
+      return
+    end
+    local step = seq[i]
+    M.run_template(step.template, {
+      on_done = function(code)
+        refresh_statuses()
+        redraw("all")
+        if code == 0 then
+          run_at(i + 1)
+        else
+          vim.notify("Builder: run-all stopped at '" .. step.label .. "' (exit " .. code .. ")", vim.log.levels.ERROR)
+        end
+      end,
+    })
+  end
+  run_at(1)
+end
+
+local function run_all_menu()
+  if not state.root then
+    return
+  end
+  local target = state.platform == "desktop" and "desktop" or state.platform_flag
+  open_menu(
+    "run all (" .. target .. ")",
+    { "Run all", "Run all + install deps", "Run all + clean + reinstall" },
+    "Run all",
+    function(c)
+      if c == "Run all + clean + reinstall" then
+        run_all({ clean = true, install = true })
+      elseif c == "Run all + install deps" then
+        run_all({ install = true })
+      else
+        run_all({})
+      end
+    end
+  )
+end
+
 local function set_keymaps()
   local buf = state.buf
   local function map(lhs, fn)
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true })
+  end
+  -- scroll the Logs content only (offset 0 = newest); no-op unless Logs is shown
+  local function scroll(delta)
+    if state.bottom ~= "logs" then
+      return
+    end
+    local tasks = require("ledger.tasks")
+    local id
+    if state.focus and state.focus.col == "pipeline" then
+      local step = (state.steps or {})[state.focus_idx]
+      id = step and step.template or nil
+    end
+    id = id or tasks.last_started
+    local len = id and tasks.log_len(id) or 0
+    local maxoff = math.max(0, len - state.bottom_h)
+    state.log_offset = math.max(0, math.min((state.log_offset or 0) + delta, maxoff))
+    redraw("body")
   end
   local function move(delta)
     state.focus_idx = (state.focus_idx or 1) + delta
@@ -961,24 +1056,88 @@ local function set_keymaps()
   end)
   map("e", pick_env)
   map("d", pick_device)
+  map("A", run_all_menu)
+  -- log scroll (mouse wheel + Ctrl-u/d), active only when Logs is shown
+  map("<ScrollWheelUp>", function()
+    scroll(3)
+  end)
+  map("<ScrollWheelDown>", function()
+    scroll(-3)
+  end)
+  map("<C-u>", function()
+    scroll(5)
+  end)
+  map("<C-d>", function()
+    scroll(-5)
+  end)
   map("?", toggle_help)
-  map("q", M.close)
-  map("<Esc>", M.close)
+  map("q", M.hide)
+  map("<Esc>", M.hide)
 end
 
 -- ── open / close ──────────────────────────────────────────────────────────────
 
 M._opening = false
 
--- Build + show the dashboard (after the loader). Closes the loader on entry.
-local function build()
-  M._opening = false
-  require("ledger.builder.ui.loader").close()
-
+-- Open the float on the (already-initialised) state.buf and wire it up. Shared
+-- by a fresh build() and a re-show() so toggling preserves state.
+local function mount()
   local volt = require("volt")
   local builder_cfg = cfg()
   local ns = require("ledger.builder.ui.hl").setup()
   local border = builder_cfg.border and "single" or "none"
+
+  compute_dims()
+  refresh_meta()
+  refresh_statuses()
+
+  -- a re-shown buffer is still nomodifiable from the prior session; volt.run
+  -- needs to write the blank canvas, so re-enable writes before rendering.
+  vim.bo[state.buf].modifiable = true
+  volt.gen_data({ { buf = state.buf, layout = sections(), xpad = 2, ns = state.vns } })
+  local h = require("volt.state")[state.buf].h
+  local width = state.W + 4
+  state.win = vim.api.nvim_open_win(state.buf, true, {
+    relative = "editor",
+    width = width,
+    height = h,
+    row = math.floor((vim.o.lines - h) / 2),
+    col = math.floor((vim.o.columns - width) / 2),
+    style = "minimal",
+    border = border, -- the border carries no title (see config.builder.border)
+  })
+
+  -- opaque, theme-tracking panel via the window-local highlight namespace
+  pcall(vim.api.nvim_win_set_hl_ns, state.win, ns)
+  if builder_cfg.transparent then
+    vim.wo[state.win].winblend = 0
+  end
+
+  volt.run(state.buf, { h = h, w = state.W })
+
+  -- MOUSE: register the buffer with volt's event system.
+  local volt_events = require("volt.events")
+  volt_events.add(state.buf)
+  volt_events.enable()
+
+  set_keymaps() -- after add() so our nav keys win over volt's defaults
+
+  -- closing the window HIDES (keeps state); use M.close for a hard reset
+  vim.api.nvim_create_autocmd("WinClosed", {
+    buffer = state.buf,
+    once = true,
+    callback = function()
+      vim.schedule(M.hide)
+    end,
+  })
+
+  start_timer()
+end
+
+-- Fresh build (after the loader). Initialises state, then mounts.
+local function build()
+  M._opening = false
+  require("ledger.builder.ui.loader").close()
 
   -- Detect from the CURRENT working dir only (no monorepo_root fallback).
   local detox = require("ledger.detox")
@@ -998,6 +1157,7 @@ local function build()
     help = false,
     help_tab = "shortcuts",
     bottom = "logs",
+    log_offset = 0,
     side = "left",
     focus_idx = 1,
     buf = vim.api.nvim_create_buf(false, true),
@@ -1008,49 +1168,7 @@ local function build()
   }
 
   install_callbacks()
-  compute_dims()
-  refresh_meta()
-  refresh_statuses()
-
-  volt.gen_data({ { buf = state.buf, layout = sections(), xpad = 2, ns = state.vns } })
-  local h = require("volt.state")[state.buf].h
-  local width = state.W + 4
-  state.win = vim.api.nvim_open_win(state.buf, true, {
-    relative = "editor",
-    width = width,
-    height = h,
-    row = math.floor((vim.o.lines - h) / 2),
-    col = math.floor((vim.o.columns - width) / 2),
-    style = "minimal",
-    border = border,
-    title = " Ledger Builder ",
-    title_pos = "center",
-  })
-
-  -- opaque, theme-tracking panel via the window-local highlight namespace
-  pcall(vim.api.nvim_win_set_hl_ns, state.win, ns)
-  if builder_cfg.transparent then
-    vim.wo[state.win].winblend = 0
-  end
-
-  volt.run(state.buf, { h = h, w = state.W })
-
-  -- MOUSE: register the buffer with volt's event system.
-  local volt_events = require("volt.events")
-  volt_events.add(state.buf)
-  volt_events.enable()
-
-  set_keymaps() -- after add() so our nav keys win over volt's defaults
-
-  vim.api.nvim_create_autocmd("WinClosed", {
-    buffer = state.buf,
-    once = true,
-    callback = function()
-      vim.schedule(M.close)
-    end,
-  })
-
-  start_timer()
+  mount()
 end
 
 function M.open()
@@ -1071,6 +1189,33 @@ function M.open()
   end
 end
 
+-- Hide the window but KEEP state + buffer, so re-opening restores everything.
+function M.hide()
+  stop_timer()
+  M._opening = false
+  pcall(function()
+    require("ledger.builder.ui.loader").close()
+  end)
+  if state and state.win and vim.api.nvim_win_is_valid(state.win) then
+    pcall(vim.api.nvim_win_close, state.win, true)
+  end
+  if state then
+    state.win = nil
+  end
+end
+
+-- Re-show a hidden Builder on its preserved buffer (no loader); else open fresh.
+function M.show()
+  if state and state.win and vim.api.nvim_win_is_valid(state.win) then
+    vim.api.nvim_set_current_win(state.win)
+  elseif state and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+    mount()
+  else
+    M.open()
+  end
+end
+
+-- Hard reset: destroy the window, buffer and state.
 function M.close()
   stop_timer()
   M._opening = false
@@ -1091,7 +1236,9 @@ end
 
 function M.toggle()
   if state and state.win and vim.api.nvim_win_is_valid(state.win) then
-    M.close()
+    M.hide()
+  elseif state and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+    M.show()
   else
     M.open()
   end

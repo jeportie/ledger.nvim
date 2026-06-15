@@ -123,29 +123,52 @@ local function resolve_sources(step, ctx)
   return out
 end
 
--- Step status: "done" | "stale" | "pending" | "ready".
+-- Step status: "missing" | "needs_update" | "done".
+-- (The controller overlays "in_progress" when the step's task is running.)
 -- ctx = {
 --   root, config,
 --   detox_binary(config) -> rel path | nil,
 --   artifact_exists(abs) -> bool,
 --   is_stale(abs, abs_sources) -> bool,
 --   proc_alive(name) -> bool,
+--   last_ok(template) -> true | false | nil,  -- last run succeeded? (no-artifact steps)
 -- }
 function M.status(step, ctx)
   if step.proc then
-    return ctx.proc_alive(step.proc) and "done" or "pending"
+    return ctx.proc_alive(step.proc) and "done" or "missing"
   end
   if step.artifact then
     local path = M.resolve_artifact(step, ctx)
     if not path or not ctx.artifact_exists(path) then
-      return "pending"
+      return "missing"
     end
     if step.sources and #step.sources > 0 and ctx.is_stale(path, resolve_sources(step, ctx)) then
-      return "stale"
+      return "needs_update"
     end
     return "done"
   end
-  return "ready"
+  -- stateless step (clean / cli / libs / pw_setup / test): driven by last run
+  return (ctx.last_ok and ctx.last_ok(step.template)) and "done" or "missing"
+end
+
+-- Global state for the target, derived from per-step statuses.
+-- "in_progress" if any step is running; "ready" if every non-optional step is
+-- done; otherwise "not_ready".
+function M.target_state(steps, statuses)
+  local any_running, all_done = false, true
+  for _, step in ipairs(steps or {}) do
+    local s = (statuses or {})[step.id]
+    if s == "in_progress" then
+      any_running = true
+    end
+    if not step.optional and s ~= "done" then
+      all_done = false
+    end
+  end
+  if any_running then
+    return "in_progress"
+  end
+  return all_done and "ready" or "not_ready"
 end
 
 return M

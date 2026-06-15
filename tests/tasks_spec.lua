@@ -93,6 +93,14 @@ describe("ledger.tasks.templates", function()
         "PWDEBUG=1 pnpm e2e:desktop test:playwright",
         templates.resolve("desktop.pw.run", { pwdebug = true }, ROOT).cmd
       )
+      assert.equals(
+        "MOCK=1 pnpm e2e:desktop test:playwright",
+        templates.resolve("desktop.pw.run", { mock = true }, ROOT).cmd
+      )
+      assert.equals(
+        "MOCK=1 PWDEBUG=1 pnpm e2e:desktop test:playwright",
+        templates.resolve("desktop.pw.run", { mock = true, pwdebug = true }, ROOT).cmd
+      )
     end)
 
     it("clean / fix templates", function()
@@ -132,5 +140,27 @@ describe("ledger.tasks.templates", function()
     assert.is_true(has(desktop, "desktop.build.testing"))
     assert.is_true(has(desktop, "shared.lib.watch"))
     assert.is_false(has(desktop, "mobile.metro"))
+  end)
+end)
+
+describe("ledger.tasks runtime", function()
+  local tasks = require("ledger.tasks")
+
+  it("strip_ansi removes colour + cursor CSI and carriage returns", function()
+    assert.equals("File (cjs)  Size", tasks.strip_ansi("\27[34mFile (cjs)\27[39m  Size\r"))
+    assert.equals("plain", tasks.strip_ansi("plain"))
+    assert.equals("", tasks.strip_ansi("\27[2K"))
+  end)
+
+  it("log_window slices a window ending `offset` lines from the newest", function()
+    tasks.tasks["spec.win"] = { lines = {} }
+    for i = 1, 20 do
+      tasks.tasks["spec.win"].lines[i] = "L" .. i
+    end
+    assert.same({ "L18", "L19", "L20" }, tasks.log_window("spec.win", 0, 3))
+    assert.same({ "L8", "L9", "L10" }, tasks.log_window("spec.win", 10, 3))
+    assert.equals(20, tasks.log_len("spec.win"))
+    assert.same({}, tasks.log_window("nope", 0, 3))
+    tasks.tasks["spec.win"] = nil
   end)
 end)

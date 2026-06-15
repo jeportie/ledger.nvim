@@ -9,19 +9,19 @@
 local M = {}
 
 local function glyph(s, tick, hlmod)
-  if s == "running" then
+  if s == "in_progress" or s == "running" then
     local cfg = require("ledger.config").get().builder or {}
     local name = (cfg.spinner and cfg.spinner.pipeline) or "dots"
     local frame = require("ledger.builder.ui.spin").frame(name, tick)
     return frame, hlmod and hlmod(tick) or "LedgerStateRunning"
   elseif s == "done" then
     return "✓", "LedgerStateDone"
-  elseif s == "stale" then
+  elseif s == "needs_update" or s == "stale" then
     return "~", "LedgerStateStale"
   elseif s == "failed" then
     return "✗", "LedgerStateFailed"
   end
-  return "○", "LedgerStatePending"
+  return "○", "LedgerStatePending" -- missing / pending
 end
 
 local function fmt_dur(secs)
@@ -164,8 +164,25 @@ end
 
 -- ── ring sections (content only; controller boxes them) ─────────────────────
 
-local STATE_WORD =
-  { done = "done", running = "running", stale = "stale", failed = "failed", pending = "pending", ready = "ready" }
+local STATE_WORD = {
+  done = "done",
+  in_progress = "in progress",
+  needs_update = "needs update",
+  missing = "missing",
+  -- legacy aliases (in case any old status leaks through)
+  running = "in progress",
+  stale = "needs update",
+  failed = "missing",
+  pending = "missing",
+  ready = "missing",
+}
+
+-- Colour-coded target-state word for the pipeline header line.
+local TARGET_WORD = {
+  ready = { "READY", "LedgerStateDone" },
+  in_progress = { "IN PROGRESS", "LedgerStateRunning" },
+  not_ready = { "NOT READY", "LedgerStateStale" },
+}
 
 -- A loading-bar sweep for the process activity bars (0→100 by tick when alive).
 local function sweep_pct(alive, tick)
@@ -207,13 +224,13 @@ function M.pipeline_content(st, inner_w)
 
   local rows = { { " Step", "State", "Dur" } }
   for i, step in ipairs(steps) do
-    local state = (st.statuses or {})[step.id] or "pending"
-    local g, ghl = glyph(state, st.tick or 0, state == "running" and hl.pulse or nil)
+    local state = (st.statuses or {})[step.id] or "missing"
+    local g, ghl = glyph(state, st.tick or 0, state == "in_progress" and hl.pulse or nil)
     local focused = st.focus and st.focus.col == "pipeline" and st.focus.idx == i
     local bullet, bhl
     if focused then
       bullet, bhl = "▶", "LedgerBuilderKey"
-    elseif state == "running" then
+    elseif state == "in_progress" then
       bullet, bhl = spin.frame(step_spinner, st.tick or 0), "LedgerYellow0"
     else
       bullet, bhl = "✶", "LedgerYellow0"
@@ -233,7 +250,13 @@ function M.pipeline_content(st, inner_w)
     }
   end
 
-  local lines = { {}, bar, {} } -- leading blank + progress bar + blank
+  -- global target state line (desktop · READY / IN PROGRESS / NOT READY)
+  local target = st.platform == "desktop" and "desktop" or st.platform_flag
+  local tstate = require("ledger.builder.pipeline").target_state(steps, st.statuses or {})
+  local tword = TARGET_WORD[tstate] or TARGET_WORD.not_ready
+  local target_line = { { "  " .. target .. " · ", "LedgerBuilderDim" }, { tword[1], tword[2] } }
+
+  local lines = { {}, target_line, bar, {} } -- blank + target state + bar + blank
   for _, l in ipairs(ui.table(rows, inner_w, "LedgerTitle")) do
     lines[#lines + 1] = l
   end
@@ -408,23 +431,26 @@ function M.process_popup_content(info)
   return lines
 end
 
-function M.logs_content(st, height)
+function M.logs_content(st, height, width)
   local tasks = require("ledger.tasks")
+  width = width or 50
   local id
   if st.focus and st.focus.col == "pipeline" then
     local step = (st.steps or {})[st.focus.idx]
     id = step and step.template or nil
   end
   id = id or tasks.last_started
-  local tail = id and tasks.log_tail(id, height or 12) or {}
-  if #tail == 0 then
+  -- scroll window: offset 0 = newest tail; st.log_offset scrolls older
+  local win = id and tasks.log_window(id, st.log_offset or 0, height or 12) or {}
+  if #win == 0 then
     return { { { "(no output yet — run a step)", "LedgerBuilderDim" } } }
   end
+  local maxw = math.max(8, width - 2)
   local lines = {}
-  for _, l in ipairs(tail) do
+  for _, l in ipairs(win) do
     local txt = l:gsub("\t", "  ")
-    if #txt > 50 then
-      txt = txt:sub(1, 49) .. "…"
+    if vim.fn.strdisplaywidth(txt) > maxw then
+      txt = vim.fn.strcharpart(txt, 0, maxw - 1) .. "…"
     end
     local hl = "LedgerBuilderDim"
     if txt:match("[Ee]rror") or txt:match("✗") then
@@ -457,10 +483,10 @@ function M.stats_history(st, inner_w)
     recent = require("ledger.builder.mock").recent(target)
   end
   if #recent == 0 then
-    return { { { "no runs yet", "LedgerBuilderDim" } } }
+    return { {}, { { "no runs yet", "LedgerBuilderDim" } } }
   end
   local maxlabel = math.max(4, (inner_w or 24) - 11)
-  local lines = {}
+  local lines = { {} } -- top breathing room
   for _, e in ipairs(recent) do
     local ok = e.code == 0
     local label = (e.label or "?"):gsub("^%S+%s*·%s*", "")
@@ -485,25 +511,29 @@ function M.stats_buildtime(st, inner_w)
     durs = require("ledger.builder.mock").build_durations(target)
   end
   if #durs == 0 then
-    return { { { "no builds yet", "LedgerBuilderDim" } } }
+    return { {}, { { "no builds yet", "LedgerBuilderDim" } } }
   end
   local maxd = 1
   for _, d in ipairs(durs) do
     maxd = math.max(maxd, d)
   end
+  -- fixed, rounded axis (stable labels) instead of a moving per-window max
+  local fixed_max = math.max(120, math.ceil(maxd / 60) * 60)
   local norm = {}
   for _, d in ipairs(durs) do
-    norm[#norm + 1] = math.floor((d / maxd) * 100)
+    norm[#norm + 1] = math.floor((d / fixed_max) * 100)
   end
-  return ui.graphs.bar({
+  -- fill the card: size each bar from the available width (label gutter ≈ 8)
+  local bw = math.max(1, math.floor(((inner_w or 24) - 8) / #norm))
+  local bars = ui.graphs.bar({
     val = norm,
     footer_label = { "last " .. #durs },
     format_labels = function(x)
-      return tostring(math.floor((x / 100) * maxd)) .. "s"
+      return tostring(math.floor((x / 100) * fixed_max)) .. "s"
     end,
     baropts = {
-      w = 2,
-      gap = 1,
+      w = bw,
+      gap = 0,
       format_hl = function(x)
         if x > 80 then
           return "LedgerStateFailed"
@@ -513,8 +543,9 @@ function M.stats_buildtime(st, inner_w)
         return "LedgerStateDone"
       end,
     },
-    w = inner_w,
   })
+  table.insert(bars, 1, {}) -- top breathing room
+  return bars
 end
 
 function M.stats_passrate(st, inner_w)
@@ -526,7 +557,7 @@ function M.stats_passrate(st, inner_w)
     rate, n = require("ledger.builder.mock").pass_rate(target)
   end
   if not rate then
-    return { { { "no test runs yet", "LedgerBuilderDim" } } }
+    return { {}, { { "no test runs yet", "LedgerBuilderDim" } } }
   end
   local bar = ui.progressbar({
     w = math.max(8, (inner_w or 24) - 10),
@@ -534,7 +565,7 @@ function M.stats_passrate(st, inner_w)
     icon = { on = "█", off = "░" },
     hl = { on = rate >= 80 and "LedgerStateDone" or "LedgerStateStale", off = "LedgerBuilderDim" },
   })
-  return { bar, {}, { { rate .. "%  (" .. n .. " runs)", "LedgerBuilderDim" } } }
+  return { {}, bar, {}, { { rate .. "%  (" .. n .. " runs)", "LedgerBuilderDim" } } }
 end
 
 -- Combined stats (vertical fallback / single column).
@@ -605,6 +636,7 @@ function M.help_shortcuts()
     {},
     { { "  Actions", "LedgerBuilderTitle" } },
     row("⏎", "run focused step / toggle process", "→ background pnpm task"),
+    row("A", "run all steps", "dropdown · stops on first failure"),
     row("r", "run tests", "All · spec file · by name · by ticket"),
     row("B", "build", "→ desktop build:* / detox e2e:build"),
     row("x / s", "kill / start focused process"),
@@ -615,8 +647,9 @@ function M.help_shortcuts()
     row("R", "refresh staleness + liveness"),
     {},
     { { "  View", "LedgerBuilderTitle" } },
+    row("wheel / C-u C-d", "scroll the Logs pane"),
     row("?", "toggle this help"),
-    row("q / Esc", "close"),
+    row("q / Esc", "hide (state preserved)"),
   }
 end
 

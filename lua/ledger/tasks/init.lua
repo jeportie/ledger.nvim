@@ -13,6 +13,12 @@ M.tasks = {}
 
 local RING_MAX = 1000
 
+-- Strip ANSI CSI sequences (colour + cursor) and stray carriage returns from a
+-- captured log line so the dashboard renders plain text.
+function M.strip_ansi(line)
+  return (line:gsub("\27%[[%d;]*%a", ""):gsub("\r", ""))
+end
+
 -- Resolve the monorepo root: configured `monorepo_root` wins, else detect from
 -- cwd. Returns nil if neither points at a ledger-live checkout.
 function M.resolve_root()
@@ -58,6 +64,7 @@ function M.run(id, opts)
   local rec = { lines = {}, running = true, started = os.time() }
   local function append(data)
     for _, line in ipairs(data) do
+      line = M.strip_ansi(line)
       if line ~= "" then
         rec.lines[#rec.lines + 1] = line
         if #rec.lines > RING_MAX then
@@ -102,6 +109,11 @@ function M.run(id, opts)
           lvl
         )
       end)
+      if opts.on_done then
+        vim.schedule(function()
+          opts.on_done(code)
+        end)
+      end
     end,
   })
 
@@ -144,6 +156,30 @@ function M.log_tail(id, n)
     out[#out + 1] = r.lines[i]
   end
   return out
+end
+
+-- A window of up to `n` lines ending `offset` lines back from the newest
+-- (offset 0 = the tail). Used by the Logs pane for wheel scrolling.
+function M.log_window(id, offset, n)
+  local r = M.tasks[id]
+  if not r then
+    return {}
+  end
+  n = n or 12
+  offset = math.max(0, offset or 0)
+  local last = math.max(0, #r.lines - offset)
+  local start = math.max(1, last - n + 1)
+  local out = {}
+  for i = start, last do
+    out[#out + 1] = r.lines[i]
+  end
+  return out
+end
+
+-- Total captured line count (for clamping the scroll offset).
+function M.log_len(id)
+  local r = M.tasks[id]
+  return r and #r.lines or 0
 end
 
 -- { code, duration } for a finished task, or nil.
