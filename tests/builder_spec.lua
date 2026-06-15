@@ -74,31 +74,41 @@ describe("ledger.builder.pipeline", function()
     end
   end
 
-  it("desktop pipeline is build-focused and ends in test", function()
+  it("desktop pipeline is build-only (install→deps→cli→build), no test/pw/clean", function()
     local steps = pipeline.steps("desktop")
-    assert.equals("clean", steps[1].id)
-    assert.equals("test", steps[#steps].id)
-    assert.is_truthy(find(steps, "cli"))
-    assert.is_truthy(find(steps, "build"))
-    assert.is_nil(find(steps, "pod")) -- desktop has no pods
+    assert.equals("install", steps[1].id) -- starts at install (clean is not a table step)
+    assert.equals("build", steps[#steps].id) -- ends at the build, not a test
+    assert.is_nil(find(steps, "test"))
+    assert.is_nil(find(steps, "pw_setup"))
+    assert.is_nil(find(steps, "clean"))
+    -- deps (libs) comes before the CLI
+    local order = {}
+    for i, s in ipairs(steps) do
+      order[s.id] = i
+    end
+    assert.is_true(order.libs < order.cli)
   end)
 
-  it("iOS has pod install; Android does not (and neither carries Metro as a step)", function()
+  it("iOS has pod install; Android does not; both end at the build (no test step)", function()
     local ios = pipeline.steps("mobile", { platform_flag = "ios" })
     local android = pipeline.steps("mobile", { platform_flag = "android" })
     assert.is_truthy(find(ios, "pod"))
     assert.is_nil(find(android, "pod"))
-    assert.is_nil(find(ios, "metro")) -- Metro is a process, not a pipeline step
-    assert.is_nil(find(android, "metro"))
-    assert.equals("test", ios[#ios].id)
-    assert.equals("test", android[#android].id)
+    assert.is_nil(find(ios, "test"))
+    assert.is_nil(find(android, "test"))
+    assert.equals("build", ios[#ios].id)
+    assert.equals("build", android[#android].id)
   end)
 
-  it("clean and install are optional steps", function()
+  it("install is diff-driven (artifact node_modules vs the lockfile), no optional steps", function()
     local steps = pipeline.steps("desktop")
-    assert.is_true(find(steps, "clean").optional)
-    assert.is_true(find(steps, "install").optional)
-    assert.is_nil(find(steps, "build").optional)
+    local install = find(steps, "install")
+    assert.equals("node_modules", install.artifact)
+    assert.same({ "pnpm-lock.yaml" }, install.sources)
+    assert.is_nil(install.optional)
+    for _, s in ipairs(steps) do
+      assert.is_nil(s.optional) -- the table holds only required build-ready steps
+    end
   end)
 
   it("artifact step: missing / needs_update / done", function()
@@ -164,10 +174,11 @@ describe("ledger.builder.pipeline", function()
       end
       return m
     end
-    -- everything done (optional steps don't block ready)
-    local done = all("done")
-    done.clean, done.install = "missing", "missing"
-    assert.equals("ready", pipeline.target_state(steps, done))
+    -- every step is required now → ready only when all done
+    assert.equals("ready", pipeline.target_state(steps, all("done")))
+    local missing = all("done")
+    missing.install = "missing"
+    assert.equals("not_ready", pipeline.target_state(steps, missing))
     assert.equals("not_ready", pipeline.target_state(steps, all("missing")))
     local running = all("done")
     running.build = "in_progress"
@@ -310,12 +321,13 @@ describe("ledger.builder.ui.panes", function()
       end
       return false
     end
-    -- borderless → the header carries the title as a full-width LedgerTitleBar
+    -- borderless (the default) → the header carries the title as a LedgerTitleBar
     require("ledger.config").setup({ builder = { border = false } })
     assert.is_true(has_title_bar(panes.header(fake)))
-    -- with a border (the default) → no in-content title (the border carries it)
+    -- with a border → no in-content title (the border carries it)
     require("ledger.config").setup({ builder = { border = true } })
     assert.is_false(has_title_bar(panes.header(fake)))
+    require("ledger.config").setup({ builder = { border = false } }) -- restore the default
   end)
 
   it("uses the per-tab active highlight groups", function()
@@ -335,16 +347,63 @@ describe("ledger.builder.ui.panes", function()
     assert.equals("LedgerTabIos", active_hl(panes.header(fake), "iOS"))
   end)
 
-  it("pipeline renders a bordered table with the ✶ step bullet", function()
+  it("pipeline renders the table (Step/State/Dur + rule) with the ✶ bullet + Run-tests button", function()
     local lines = panes.pipeline_content(fake, 60)
     local s = flat(lines)
-    -- the restored voltui.table: a Step/State/Dur header + box borders
+    -- header + a horizontal rule under it
     assert.is_truthy(s:find("Step", 1, true))
     assert.is_truthy(s:find("State", 1, true))
-    assert.is_truthy(s:find("┌", 1, true)) -- table top border
+    assert.is_truthy(s:find("─", 1, true)) -- header rule
     -- the focused step (idx 2) leads with ▶; non-focused with ✶
     assert.is_truthy(s:find("✶", 1, true))
     assert.is_truthy(s:find("▶", 1, true))
+    -- the Run-tests button lives below the table
+    assert.is_truthy(s:find("Run tests", 1, true))
+  end)
+
+  it("pipeline cells are left-aligned with uniform widths across targets", function()
+    local ui = require("volt.ui")
+    local function rowwidths(p, f)
+      local st = vim.tbl_extend("force", {}, fake, { platform = p, platform_flag = f })
+      st.steps = require("ledger.builder.pipeline").steps(p, { platform_flag = f })
+      st.statuses = {}
+      local out = {}
+      for _, l in ipairs(panes.pipeline_content(st, 70)) do
+        out[#out + 1] = ui.line_w(l)
+      end
+      return out
+    end
+    -- the table body rows are all the same width regardless of target
+    local d = rowwidths("desktop")
+    local maxw = 0
+    for _, w in ipairs(d) do
+      maxw = math.max(maxw, w)
+    end
+    local i = rowwidths("mobile", "ios")
+    local maxi = 0
+    for _, w in ipairs(i) do
+      maxi = math.max(maxi, w)
+    end
+    assert.equals(maxw, maxi) -- identical table shape across targets
+  end)
+
+  it("the Run-tests button is gated on the target being ready", function()
+    local function first_hl(line)
+      return line[1] and line[1][2]
+    end
+    local dim = panes.runtests_button(fake, "not_ready")
+    assert.equals("LedgerStatePending", first_hl(dim)) -- dim when not ready
+    -- ready on mobile (no Playwright-browser gate) → active
+    local ready = panes.runtests_button(vim.tbl_extend("force", {}, fake, { platform = "mobile" }), "ready")
+    assert.equals("LedgerStateDone", first_hl(ready))
+  end)
+
+  it("pipeline Dur reads from the persisted store", function()
+    local store = require("ledger.builder.store")
+    store._reset()
+    store.record(fake.root, fake.steps[1].template, 0, 123) -- fmt_dur(123) = 2m03
+    assert.is_truthy(flat(panes.pipeline_content(fake, 80)):find("2m03", 1, true))
+    store._reset()
   end)
 
   it("the running step's bullet animates with the tick", function()

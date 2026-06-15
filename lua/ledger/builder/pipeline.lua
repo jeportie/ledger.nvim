@@ -16,12 +16,22 @@ local M = {}
 -- here). `optional=true` steps (clean / install) are off by default and shown
 -- with a toggle; the controller's run-all only includes them when toggled on.
 
+-- Build-ready pipelines: each makes a target ready to TEST (testing itself is a
+-- separate action — the "Run tests" button). `install` is diff-driven (its
+-- status reflects whether node_modules is stale vs the lockfile). `clean` is a
+-- maintenance action (run-all "clean + reinstall" / Fix menu), not a table step.
+
 -- Desktop (Playwright / Electron).
 M.desktop = {
-  { id = "clean", label = "clean", template = "shared.clean", optional = true },
-  { id = "install", label = "install deps", template = "desktop.install", optional = true, artifact = "node_modules" },
-  { id = "cli", label = "build CLI", template = "desktop.build.cli" },
+  {
+    id = "install",
+    label = "install deps",
+    template = "desktop.install",
+    artifact = "node_modules",
+    sources = { "pnpm-lock.yaml" },
+  },
   { id = "libs", label = "build:lld:deps", template = "desktop.build.deps" },
+  { id = "cli", label = "build CLI", template = "desktop.build.cli" },
   {
     id = "build",
     label = "build:testing",
@@ -29,16 +39,19 @@ M.desktop = {
     artifact = "apps/ledger-live-desktop/.webpack/main.bundle.js",
     sources = { "apps/ledger-live-desktop/src", "apps/ledger-live-desktop/tools" },
   },
-  { id = "pw_setup", label = "playwright browser", template = "desktop.pw.setup", optional = true },
-  { id = "test", label = "playwright run", template = "desktop.pw.run", kind = "test" },
 }
 
 -- iOS (Detox debug — needs pods + Metro at run time).
 M.ios = {
-  { id = "clean", label = "clean", template = "shared.clean", optional = true },
-  { id = "install", label = "install deps", template = "mobile.install", optional = true, artifact = "node_modules" },
-  { id = "cli", label = "build CLI", template = "mobile.build.cli" },
+  {
+    id = "install",
+    label = "install deps",
+    template = "mobile.install",
+    artifact = "node_modules",
+    sources = { "pnpm-lock.yaml" },
+  },
   { id = "libs", label = "build:llm:deps", template = "mobile.build.deps" },
+  { id = "cli", label = "build CLI", template = "mobile.build.cli" },
   {
     id = "pod",
     label = "pod install",
@@ -52,15 +65,19 @@ M.ios = {
     artifact = "@detox-binary",
     sources = { "apps/ledger-live-mobile/src" },
   },
-  { id = "test", label = "detox test (iOS)", template = "mobile.detox.test", kind = "test" },
 }
 
 -- Android (Detox release — no pods, no Metro).
 M.android = {
-  { id = "clean", label = "clean", template = "shared.clean", optional = true },
-  { id = "install", label = "install deps", template = "mobile.install", optional = true, artifact = "node_modules" },
-  { id = "cli", label = "build CLI", template = "mobile.build.cli" },
+  {
+    id = "install",
+    label = "install deps",
+    template = "mobile.install",
+    artifact = "node_modules",
+    sources = { "pnpm-lock.yaml" },
+  },
   { id = "libs", label = "build:llm:deps", template = "mobile.build.deps" },
+  { id = "cli", label = "build CLI", template = "mobile.build.cli" },
   {
     id = "build",
     label = "e2e:build android.emu.release",
@@ -68,7 +85,6 @@ M.android = {
     artifact = "@detox-binary",
     sources = { "apps/ledger-live-mobile/src" },
   },
-  { id = "test", label = "detox test (Android)", template = "mobile.detox.test", kind = "test" },
 }
 
 -- Ordered steps for a platform. desktop → M.desktop; mobile → M.ios or

@@ -19,7 +19,7 @@ M.defaults = {
     env_var = "SEED",
   },
   builder = {
-    border = true, -- single window border (carries no title); false = borderless + title bar
+    border = false, -- borderless + filled title bar; true = single border (no title)
     transparent = false, -- opaque panel by default; true = see-through
     loader = true, -- show the loader animation on open
     animation = "max", -- "max" | "tasteful" | "minimal" | "off"
@@ -27,6 +27,11 @@ M.defaults = {
     -- TEMP (visual review only): seed the Stats panes with per-target mock data
     -- when there's no real history yet. Set false / remove once the look is approved.
     mock_stats = true,
+    -- where Playwright installs its browser binaries (once per machine); the
+    -- desktop "Run tests" button offers to install when this is missing.
+    pw_browsers_path = "~/.cache/ms-playwright",
+    -- watcher command (w key) — Nx watch keeps the live libs rebuilt on change.
+    watch_cmd = "pnpm nx watch --all -- pnpm nx build $NX_PROJECT_NAME",
     -- spinner.nvim patterns per role (see lua/ledger/builder/ui/spin.lua).
     -- Any name from require("spinner.pattern") works; falls back to dotsCircle.
     spinner = {

@@ -102,6 +102,12 @@ function M.run(id, opts)
           })
         end)
       end
+      -- persist per-repo per-template result (status + duration across sessions)
+      if opts.root then
+        pcall(function()
+          require("ledger.builder.store").record(opts.root, id, code, rec.duration)
+        end)
+      end
       vim.schedule(function()
         local lvl = code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR
         vim.notify(

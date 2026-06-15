@@ -263,6 +263,21 @@ M.templates = {
     daemon = true,
   },
   {
+    id = "shared.nx.watch",
+    label = "Nx · watch (auto-rebuild libs)",
+    platform = "shared",
+    kind = "daemon",
+    cwd = "repo",
+    cmd = function(opts)
+      if opts.cmd and opts.cmd ~= "" then
+        return opts.cmd
+      end
+      local b = (require("ledger.config").get() or {}).builder or {}
+      return b.watch_cmd or "pnpm nx watch --all -- pnpm nx build $NX_PROJECT_NAME"
+    end,
+    daemon = true,
+  },
+  {
     id = "shared.adb.reverse",
     label = "Android · adb reverse (8081 + 8099)",
     platform = "mobile",

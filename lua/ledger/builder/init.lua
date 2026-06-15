@@ -90,6 +90,7 @@ local function refresh_statuses()
   local proc = require("ledger.builder.proc")
   local tasks = require("ledger.tasks")
   local detox = require("ledger.detox")
+  local persisted = require("ledger.builder.store").get(state.root) -- cross-session results
 
   state.steps = pipeline.steps(state.platform, {
     platform_flag = state.platform_flag,
@@ -97,6 +98,7 @@ local function refresh_statuses()
     desktop_build = state.desktop_build,
   })
   state.procs = proc.for_platform(state.platform, state.platform_flag)
+  state.watching = tasks.is_running("shared.nx.watch")
   local alive = {}
   for _, p in ipairs(state.procs) do
     alive[p.name] = p.alive
@@ -117,10 +119,8 @@ local function refresh_statuses()
       return alive[name] or false
     end,
     last_ok = function(tmpl)
-      if not tmpl then
-        return nil
-      end
-      local r = tasks.last_result(tmpl)
+      -- persisted (survives restarts + shared across sessions), not in-memory
+      local r = tmpl and persisted[tmpl]
       if not r then
         return nil
       end
@@ -323,7 +323,8 @@ local function compute_dims()
     #pl.steps("mobile", { platform_flag = "ios" }),
     #pl.steps("mobile", { platform_flag = "android" })
   )
-  state.top_h = 4 + (1 + 2 * (max_steps + 1))
+  -- blank+target+blank+bar+blank (5) + table(header+rule+steps = 2+steps) + blank+button (2)
+  state.top_h = 9 + max_steps
   -- chrome ≈ header(6) + top borders(2) + separator(1) + bottom borders(2) + footer(1) + margin
   state.bottom_h = math.max(8, math.min(16, vim.o.lines - state.top_h - 13))
   -- shared row width so the logs/stats row aligns exactly with the top row:
@@ -391,9 +392,7 @@ local function activate()
   local v = focused_view()
   if v == "pipeline" then
     local step = (state.steps or {})[state.focus_idx]
-    if step and step.kind == "test" then
-      M.run_test()
-    elseif step and step.template then
+    if step and step.template then
       M.run_template(step.template)
     end
   elseif v == "processes" then
@@ -902,18 +901,32 @@ end
 -- ── keymaps ───────────────────────────────────────────────────────────────────
 
 -- Run every step for the target in order, chaining on success and stopping on
--- the first failure. `include` selects the optional clean/install steps.
-local function run_all(include)
+-- the first failure. mode "build" auto-includes install only when it's stale;
+-- "clean" prepends a clean + a forced reinstall. Tests are NEVER run here.
+local function run_all(mode)
   if not state.root then
     return
   end
-  local seq = {}
-  for _, step in ipairs(state.steps or {}) do
-    if step.template then
-      local gated = step.id == "clean" or step.id == "install"
-      if not gated or include[step.id] then
-        seq[#seq + 1] = step
-      end
+  local seq = {} -- list of { label, template }
+  local function add(label, template)
+    seq[#seq + 1] = { label = label, template = template }
+  end
+  if mode == "clean" then
+    add("clean", "shared.clean")
+  end
+  local install_step
+  for _, s in ipairs(state.steps or {}) do
+    if s.id == "install" then
+      install_step = s
+    end
+  end
+  -- install: forced on clean+reinstall, else only when its diff isn't done
+  if install_step and (mode == "clean" or state.statuses.install ~= "done") then
+    add(install_step.label, install_step.template)
+  end
+  for _, s in ipairs(state.steps or {}) do
+    if s.id ~= "install" and s.template then
+      add(s.label, s.template)
     end
   end
   local function run_at(i)
@@ -942,20 +955,51 @@ local function run_all_menu()
     return
   end
   local target = state.platform == "desktop" and "desktop" or state.platform_flag
-  open_menu(
-    "run all (" .. target .. ")",
-    { "Run all", "Run all + install deps", "Run all + clean + reinstall" },
-    "Run all",
-    function(c)
-      if c == "Run all + clean + reinstall" then
-        run_all({ clean = true, install = true })
-      elseif c == "Run all + install deps" then
-        run_all({ install = true })
-      else
-        run_all({})
-      end
-    end
-  )
+  open_menu("run all (" .. target .. ")", { "Run all", "Clean + reinstall + run all" }, "Run all", function(c)
+    run_all(c == "Clean + reinstall + run all" and "clean" or "build")
+  end)
+end
+
+-- Is the Playwright browser installed (once per machine)?
+local function pw_installed()
+  local bc = cfg()
+  local p = vim.fn.expand(bc.pw_browsers_path or "~/.cache/ms-playwright")
+  return uv.fs_stat(p) ~= nil
+end
+
+-- The "Run tests" action — gated on the target being READY (and, on desktop,
+-- the Playwright browser being installed; if missing, install it instead).
+local function run_tests_gated()
+  if not state.root then
+    return
+  end
+  local tstate = require("ledger.builder.pipeline").target_state(state.steps, state.statuses or {})
+  if tstate ~= "ready" then
+    vim.notify("Builder: target not ready — build it first (A)", vim.log.levels.WARN)
+    return
+  end
+  if state.platform == "desktop" and not pw_installed() then
+    vim.notify("Builder: installing the Playwright browser (one-time)…", vim.log.levels.INFO)
+    M.run_template("desktop.pw.setup")
+    return
+  end
+  M.run_test()
+end
+
+-- Toggle the Nx watcher daemon (keeps the live libs rebuilt on change).
+local function toggle_watch()
+  if not state.root then
+    return
+  end
+  local tasks = require("ledger.tasks")
+  if tasks.is_running("shared.nx.watch") then
+    tasks.stop("shared.nx.watch")
+    state.watching = false
+  else
+    tasks.run("shared.nx.watch", { root = state.root })
+    state.watching = true
+  end
+  redraw("all")
 end
 
 local function set_keymaps()
@@ -1037,7 +1081,8 @@ local function set_keymaps()
   map("B", function()
     M.run_step_by_id("build")
   end)
-  map("r", M.run_test)
+  map("r", run_tests_gated)
+  map("w", toggle_watch)
   map("F", fix_menu)
   map("R", function()
     refresh_statuses()
@@ -1158,6 +1203,7 @@ local function build()
     help_tab = "shortcuts",
     bottom = "logs",
     log_offset = 0,
+    watching = false,
     side = "left",
     focus_idx = 1,
     buf = vim.api.nvim_create_buf(false, true),
@@ -1168,6 +1214,8 @@ local function build()
   }
 
   install_callbacks()
+  state.on_runtests = run_tests_gated -- the Run-tests button + r
+  state.on_watch = toggle_watch -- the header watch chip + w
   mount()
 end
 

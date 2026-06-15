@@ -157,6 +157,15 @@ function M.header(st)
       end or nil,
     }
   end
+  -- Nx watcher chip (both platforms)
+  meta[#meta + 1] = { "   watch: ", "LedgerBuilderDim" }
+  meta[#meta + 1] = {
+    st.watching and "on" or "off",
+    st.watching and "LedgerStateDone" or "LedgerBuilderDim",
+    st.on_watch and function()
+      st.on_watch()
+    end or nil,
+  }
   lines[#lines + 1] = meta
   lines[#lines + 1] = {}
   return lines
@@ -196,8 +205,41 @@ end
 -- (Step · State · Dur). The Step cell leads with ✶ (▶ when focused; the running
 -- step's star animates via the configured spinner); the State cell carries the
 -- status glyph + word.
+-- Left-pad to display width `w` (truncate if longer) — used to left-align cells.
+local function lpad(s, w)
+  local d = vim.fn.strdisplaywidth(s)
+  if d >= w then
+    return vim.fn.strcharpart(s, 0, w)
+  end
+  return s .. string.rep(" ", w - d)
+end
+
+-- Is the Playwright browser installed (once per machine)?
+local function pw_installed()
+  local cfg = require("ledger.config").get().builder or {}
+  local p = vim.fn.expand(cfg.pw_browsers_path or "~/.cache/ms-playwright")
+  return (vim.uv or vim.loop).fs_stat(p) ~= nil
+end
+
+-- The "Run tests" button below the pipeline table; gated on the target being
+-- READY, and on desktop the Playwright browser being installed.
+function M.runtests_button(st, tstate)
+  local cb = st.on_runtests and function()
+    st.on_runtests()
+  end or nil
+  if tstate ~= "ready" then
+    return { { "  ▶ Run tests", "LedgerStatePending", cb }, { "   (build the target first)", "LedgerBuilderDim" } }
+  end
+  if st.platform == "desktop" and not pw_installed() then
+    return {
+      { "  ⚠ Install Playwright browser", "LedgerStateStale", cb },
+      { "   (one-time, per machine)", "LedgerBuilderDim" },
+    }
+  end
+  return { { "  ▶ Run tests", "LedgerStateDone", cb }, { "   r", "LedgerBuilderKey" } }
+end
+
 function M.pipeline_content(st, inner_w)
-  local tasks = require("ledger.tasks")
   local hl = require("ledger.builder.ui.hl")
   local ui = require("volt.ui")
   local spin = require("ledger.builder.ui.spin")
@@ -205,6 +247,7 @@ function M.pipeline_content(st, inner_w)
   local cfg = require("ledger.config").get().builder or {}
   local step_spinner = (cfg.spinner and cfg.spinner.step) or "star"
   local steps = st.steps or {}
+  local durs = require("ledger.builder.store").get(st.root) -- persisted per-template durations
 
   local done = 0
   for _, s in ipairs(steps) do
@@ -222,7 +265,26 @@ function M.pipeline_content(st, inner_w)
   table.insert(bar, 1, { "  " })
   bar[#bar + 1] = { "  " .. done .. "/" .. #steps, "LedgerLabel" }
 
-  local rows = { { " Step", "State", "Dur" } }
+  -- A hand-rolled table with FIXED column widths (identical across targets) and
+  -- LEFT-aligned Step/State cells. (voltui.table centers + auto-sizes per content,
+  -- which varied by target — so we lay it out ourselves; the pane box is the frame.)
+  local dur_w, state_w = 6, 15
+  local step_w = math.max(10, inner_w - state_w - dur_w - 2) -- 2 single-space gutters
+
+  local function header()
+    return {
+      { " " .. lpad("Step", step_w - 1), "LedgerBuilderTitle" },
+      { " " },
+      { lpad("State", state_w), "LedgerBuilderTitle" },
+      { " " },
+      { lpad("Dur", dur_w), "LedgerBuilderTitle" },
+    }
+  end
+  local function rule()
+    return { { string.rep("─", step_w + state_w + dur_w + 2), "LedgerSeparator" } }
+  end
+
+  local tbl = { header(), rule() }
   for i, step in ipairs(steps) do
     local state = (st.statuses or {})[step.id] or "missing"
     local g, ghl = glyph(state, st.tick or 0, state == "in_progress" and hl.pulse or nil)
@@ -235,18 +297,18 @@ function M.pipeline_content(st, inner_w)
     else
       bullet, bhl = "✶", "LedgerYellow0"
     end
-    local opt = step.optional and " ○" or ""
-    local dur = "-"
-    if step.template then
-      local res = tasks.last_result(step.template)
-      if res then
-        dur = fmt_dur(res.duration) or "-"
-      end
-    end
-    rows[#rows + 1] = {
-      { { bullet .. " ", bhl }, { tostring(i) .. " " .. step.label .. opt, "Normal" } },
-      { { g .. " " .. (STATE_WORD[state] or state), ghl } },
-      dur,
+    local bw = vim.fn.strdisplaywidth(bullet)
+    local gw = vim.fn.strdisplaywidth(g)
+    local d = durs[step.template]
+    local dur = d and fmt_dur(d.duration) or "-"
+    tbl[#tbl + 1] = {
+      { bullet .. " ", bhl }, -- Step column (left-aligned)
+      { lpad(tostring(i) .. " " .. step.label, step_w - bw - 1), "Normal" },
+      { " " },
+      { g .. " ", ghl }, -- State column (left-aligned)
+      { lpad(STATE_WORD[state] or state, state_w - gw - 1), ghl },
+      { " " },
+      { lpad(dur, dur_w), "LedgerBuilderDim" },
     }
   end
 
@@ -256,10 +318,13 @@ function M.pipeline_content(st, inner_w)
   local tword = TARGET_WORD[tstate] or TARGET_WORD.not_ready
   local target_line = { { "  " .. target .. " · ", "LedgerBuilderDim" }, { tword[1], tword[2] } }
 
-  local lines = { {}, target_line, bar, {} } -- blank + target state + bar + blank
-  for _, l in ipairs(ui.table(rows, inner_w, "LedgerTitle")) do
+  local lines = { {}, target_line, {}, bar, {} } -- blank + target + blank + bar + blank
+  for _, l in ipairs(tbl) do
     lines[#lines + 1] = l
   end
+  -- the Run-tests button lives below the table (testing is a separate action)
+  lines[#lines + 1] = {}
+  lines[#lines + 1] = M.runtests_button(st, tstate)
   return lines
 end
 
@@ -636,8 +701,9 @@ function M.help_shortcuts()
     {},
     { { "  Actions", "LedgerBuilderTitle" } },
     row("⏎", "run focused step / toggle process", "→ background pnpm task"),
-    row("A", "run all steps", "dropdown · stops on first failure"),
-    row("r", "run tests", "All · spec file · by name · by ticket"),
+    row("A", "run all (build)", "Run all · Clean + reinstall"),
+    row("r", "run tests", "active when target is READY"),
+    row("w", "toggle Nx watcher", "auto-rebuild libs on change"),
     row("B", "build", "→ desktop build:* / detox e2e:build"),
     row("x / s", "kill / start focused process"),
     row("e", "env dropdown", "desktop: build/MOCK · mobile: detox config"),
