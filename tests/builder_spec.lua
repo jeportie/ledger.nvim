@@ -347,7 +347,7 @@ describe("ledger.builder.ui.panes", function()
     assert.equals("LedgerTabIos", active_hl(panes.header(fake), "iOS"))
   end)
 
-  it("pipeline renders the table (Step/State/Dur + rule) with the ✶ bullet + Run-tests button", function()
+  it("pipeline renders the table (Step/State/Dur + rule) with the ✶ bullet + Run-tests row", function()
     local lines = panes.pipeline_content(fake, 60)
     local s = flat(lines)
     -- header + a horizontal rule under it
@@ -357,8 +357,9 @@ describe("ledger.builder.ui.panes", function()
     -- the focused step (idx 2) leads with ▶; non-focused with ✶
     assert.is_truthy(s:find("✶", 1, true))
     assert.is_truthy(s:find("▶", 1, true))
-    -- the Run-tests button lives below the table
+    -- the Run-tests row is the last pipeline row (test devicon + "Run tests")
     assert.is_truthy(s:find("Run tests", 1, true))
+    assert.is_truthy(s:find("󰙨", 1, true)) -- the test icon (default test_icon)
   end)
 
   it("pipeline cells are left-aligned with uniform widths across targets", function()
@@ -387,15 +388,54 @@ describe("ledger.builder.ui.panes", function()
     assert.equals(maxw, maxi) -- identical table shape across targets
   end)
 
-  it("the Run-tests button is gated on the target being ready", function()
-    local function first_hl(line)
-      return line[1] and line[1][2]
+  it("the navigable Run-tests row reflects readiness + focuses at row #steps+1", function()
+    local pl = require("ledger.builder.pipeline")
+    local steps = pl.steps("mobile", { platform_flag = "ios" })
+    local function content(statuses, focus_idx)
+      local st = vim.tbl_extend("force", {}, fake, {
+        platform = "mobile",
+        platform_flag = "ios",
+        steps = steps,
+        statuses = statuses,
+        focus = { col = "pipeline", idx = focus_idx },
+      })
+      return flat(panes.pipeline_content(st, 70))
     end
-    local dim = panes.runtests_button(fake, "not_ready")
-    assert.equals("LedgerStatePending", first_hl(dim)) -- dim when not ready
-    -- ready on mobile (no Playwright-browser gate) → active
-    local ready = panes.runtests_button(vim.tbl_extend("force", {}, fake, { platform = "mobile" }), "ready")
-    assert.equals("LedgerStateDone", first_hl(ready))
+    -- all build steps done (mobile → no pw gate) → Run-tests row reads "ready"
+    local done = {}
+    for _, s in ipairs(steps) do
+      done[s.id] = "done"
+    end
+    assert.is_truthy(content(done, #steps + 1):find("ready", 1, true))
+    -- not built → "locked"
+    assert.is_truthy(content({}, 1):find("locked", 1, true))
+  end)
+
+  it("proc_tile splits N processes into rows of ≤2 (lone last when odd)", function()
+    assert.same({ 2 }, panes.proc_tile(2))
+    assert.same({ 2, 1 }, panes.proc_tile(3))
+    assert.same({ 2, 2 }, panes.proc_tile(4))
+    assert.same({ 2, 2, 1 }, panes.proc_tile(5))
+  end)
+
+  it("pw_installed is true when a candidate browsers dir is non-empty", function()
+    local dir = vim.fn.tempname()
+    vim.fn.mkdir(dir .. "/chromium-1140", "p")
+    require("ledger.config").setup({ builder = { pw_browsers_path = dir } })
+    assert.is_true(panes.pw_installed())
+    require("ledger.config").setup({ builder = {} }) -- restore
+  end)
+
+  it("header title bg covers only the title text, not the whole line", function()
+    local seg
+    for _, line in ipairs(panes.header(fake)) do
+      for _, s in ipairs(line) do
+        if s[2] == "LedgerTitleBar" then
+          seg = s[1]
+        end
+      end
+    end
+    assert.equals(" Ledger Builder ", seg) -- a small plaque, not a full-width bar
   end)
 
   it("pipeline Dur reads from the persisted store", function()

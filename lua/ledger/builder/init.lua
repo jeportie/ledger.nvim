@@ -51,7 +51,7 @@ end
 
 local function view_len(view)
   if view == "pipeline" then
-    return #(state.steps or {})
+    return #(state.steps or {}) + 1 -- + the navigable Run-tests row
   elseif view == "processes" then
     return #(state.procs or {})
   end
@@ -323,8 +323,8 @@ local function compute_dims()
     #pl.steps("mobile", { platform_flag = "ios" }),
     #pl.steps("mobile", { platform_flag = "android" })
   )
-  -- blank+target+blank+bar+blank (5) + table(header+rule+steps = 2+steps) + blank+button (2)
-  state.top_h = 9 + max_steps
+  -- blank+target+blank+bar+blank (5) + table(header+rule+steps+run-tests row = 3+steps)
+  state.top_h = 8 + max_steps
   -- chrome ≈ header(6) + top borders(2) + separator(1) + bottom borders(2) + footer(1) + margin
   state.bottom_h = math.max(8, math.min(16, vim.o.lines - state.top_h - 13))
   -- shared row width so the logs/stats row aligns exactly with the top row:
@@ -391,7 +391,14 @@ local function activate()
   end
   local v = focused_view()
   if v == "pipeline" then
-    local step = (state.steps or {})[state.focus_idx]
+    local steps = state.steps or {}
+    if state.focus_idx == #steps + 1 then -- the Run-tests row
+      if state.on_runtests then
+        state.on_runtests()
+      end
+      return
+    end
+    local step = steps[state.focus_idx]
     if step and step.template then
       M.run_template(step.template)
     end
@@ -797,6 +804,9 @@ end
 
 local function fix_menu()
   local items = { { label = "Global fix (reinstall node_modules + store)", id = "fix.global" } }
+  if state.platform == "desktop" then
+    items[#items + 1] = { label = "Install Playwright browser", id = "desktop.pw.setup" }
+  end
   if state.platform == "mobile" and state.platform_flag == "ios" then
     items[#items + 1] = { label = "iOS pod fix (reset Pods)", id = "fix.ios_pod" }
   end
@@ -810,7 +820,7 @@ local function fix_menu()
   open_menu("Fix / maintenance", labels, nil, function(choice)
     local id = by_label[choice]
     if id then
-      require("ledger.tasks").run(id)
+      require("ledger.tasks").run(id, { root = state.root })
     end
   end)
 end
@@ -900,9 +910,9 @@ end
 
 -- ── keymaps ───────────────────────────────────────────────────────────────────
 
--- Run every step for the target in order, chaining on success and stopping on
--- the first failure. mode "build" auto-includes install only when it's stale;
--- "clean" prepends a clean + a forced reinstall. Tests are NEVER run here.
+-- Run every NOT-done step for the target in order, chaining on success and
+-- stopping on the first failure. mode "build" runs only steps whose status isn't
+-- `done`; "clean" prepends a clean + forces every step. Tests are NEVER run here.
 local function run_all(mode)
   if not state.root then
     return
@@ -914,20 +924,14 @@ local function run_all(mode)
   if mode == "clean" then
     add("clean", "shared.clean")
   end
-  local install_step
   for _, s in ipairs(state.steps or {}) do
-    if s.id == "install" then
-      install_step = s
-    end
-  end
-  -- install: forced on clean+reinstall, else only when its diff isn't done
-  if install_step and (mode == "clean" or state.statuses.install ~= "done") then
-    add(install_step.label, install_step.template)
-  end
-  for _, s in ipairs(state.steps or {}) do
-    if s.id ~= "install" and s.template then
+    if s.template and (mode == "clean" or (state.statuses or {})[s.id] ~= "done") then
       add(s.label, s.template)
     end
+  end
+  if #seq == 0 then
+    vim.notify("Builder: everything is already up to date ✓", vim.log.levels.INFO)
+    return
   end
   local function run_at(i)
     if i > #seq then
@@ -960,11 +964,9 @@ local function run_all_menu()
   end)
 end
 
--- Is the Playwright browser installed (once per machine)?
+-- Is the Playwright browser installed? (single source of truth in panes)
 local function pw_installed()
-  local bc = cfg()
-  local p = vim.fn.expand(bc.pw_browsers_path or "~/.cache/ms-playwright")
-  return uv.fs_stat(p) ~= nil
+  return require("ledger.builder.ui.panes").pw_installed()
 end
 
 -- The "Run tests" action — gated on the target being READY (and, on desktop,
@@ -1024,36 +1026,71 @@ local function set_keymaps()
     state.log_offset = math.max(0, math.min((state.log_offset or 0) + delta, maxoff))
     redraw("body")
   end
-  local function move(delta)
-    state.focus_idx = (state.focus_idx or 1) + delta
-    sync_focus()
-    redraw("body")
+  -- 2-D navigation: Pipeline is the left column (steps + the Run-tests row),
+  -- Processes is a right-hand card grid. Map flat focus_idx ↔ (row,col) via the
+  -- same tiling panes uses, so left/right move between card columns too.
+  local function proc_pos(idx)
+    local rows = require("ledger.builder.ui.panes").proc_tile(#(state.procs or {}))
+    local seen = 0
+    for r, ncol in ipairs(rows) do
+      if idx <= seen + ncol then
+        return r, idx - seen, rows
+      end
+      seen = seen + ncol
+    end
+    return 1, 1, rows
   end
-  local function side(s)
-    state.side = s
+  local function proc_idx(rows, row, col)
+    row = math.max(1, math.min(row, #rows))
+    col = math.max(1, math.min(col, rows[row]))
+    local seen = 0
+    for r = 1, row - 1 do
+      seen = seen + rows[r]
+    end
+    return seen + col
+  end
+  local function nav(dir)
+    if focused_view() == "pipeline" then
+      local n = #(state.steps or {}) + 1
+      if dir == "up" then
+        state.focus_idx = math.max(1, (state.focus_idx or 1) - 1)
+      elseif dir == "down" then
+        state.focus_idx = math.min(n, (state.focus_idx or 1) + 1)
+      elseif dir == "right" and #(state.procs or {}) > 0 then
+        state.side, state.focus_idx = "right", 1
+      end
+    else -- processes grid
+      local row, col, rows = proc_pos(state.focus_idx or 1)
+      if dir == "up" then
+        state.focus_idx = proc_idx(rows, row - 1, col)
+      elseif dir == "down" then
+        state.focus_idx = proc_idx(rows, row + 1, col)
+      elseif dir == "right" then
+        state.focus_idx = proc_idx(rows, row, col + 1)
+      elseif dir == "left" then
+        if col > 1 then
+          state.focus_idx = proc_idx(rows, row, col - 1)
+        else
+          state.side = "left" -- escape to Pipeline
+        end
+      end
+    end
     sync_focus()
     redraw("body")
   end
 
-  -- within-column nav (Tab is now the platform switch, see below)
-  for _, k in ipairs({ "j", "<Down>" }) do
-    map(k, function()
-      move(1)
-    end)
-  end
-  for _, k in ipairs({ "k", "<Up>" }) do
-    map(k, function()
-      move(-1)
-    end)
-  end
-  for _, k in ipairs({ "l", "<Right>" }) do
-    map(k, function()
-      side("right")
-    end)
-  end
-  for _, k in ipairs({ "h", "<Left>" }) do
-    map(k, function()
-      side("left")
+  for _, kv in ipairs({
+    { "j", "down" },
+    { "<Down>", "down" },
+    { "k", "up" },
+    { "<Up>", "up" },
+    { "l", "right" },
+    { "<Right>", "right" },
+    { "h", "left" },
+    { "<Left>", "left" },
+  }) do
+    map(kv[1], function()
+      nav(kv[2])
     end)
   end
   -- Tab / Shift-Tab toggle Desktop ↔ Mobile — or, while help is open, cycle the
@@ -1081,7 +1118,7 @@ local function set_keymaps()
   map("B", function()
     M.run_step_by_id("build")
   end)
-  map("r", run_tests_gated)
+  -- tests run from the navigable "Run tests" pipeline row (j to it, then <CR>)
   map("w", toggle_watch)
   map("F", fix_menu)
   map("R", function()

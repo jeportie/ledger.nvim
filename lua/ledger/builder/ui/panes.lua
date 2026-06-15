@@ -77,18 +77,16 @@ function M.header(st)
 
   local lines = { {} } -- top margin (breathing room)
 
-  -- Centered title as a filled bar — only when there's no window border to
-  -- carry it. Every segment uses the LedgerTitleBar bg so it reads as a rectangle.
+  -- Centered title — only when there's no window border to carry it. The
+  -- LedgerTitleBar bg tints ONLY the title text (a small plaque), not the line.
   if not cfg.border then
-    local title = "Ledger Builder"
-    local tw = vim.fn.strdisplaywidth(title)
-    local lpad = math.max(0, math.floor((width - tw) / 2))
-    local rpad = math.max(0, width - tw - lpad)
+    local title = " Ledger Builder "
+    local lead = math.max(0, math.floor((width - vim.fn.strdisplaywidth(title)) / 2))
     lines[#lines + 1] = {
-      { string.rep(" ", lpad), "LedgerTitleBar" },
+      { string.rep(" ", lead) },
       { title, "LedgerTitleBar" },
-      { string.rep(" ", rpad), "LedgerTitleBar" },
     }
+    lines[#lines + 1] = {} -- blank below the title
   end
 
   lines[#lines + 1] = {
@@ -116,6 +114,7 @@ function M.header(st)
   else
     lines[#lines + 1] = {} -- keep desktop the same height as mobile
   end
+  lines[#lines + 1] = {} -- blank below the subtab row
 
   local repo = st.root and vim.fn.fnamemodify(st.root, ":t") or "no ledger-live repo"
   local meta = {
@@ -214,29 +213,29 @@ local function lpad(s, w)
   return s .. string.rep(" ", w - d)
 end
 
--- Is the Playwright browser installed (once per machine)?
-local function pw_installed()
+-- Is the Playwright browser installed (once per machine)? Probe candidate dirs
+-- in order and return true if any is a NON-EMPTY directory (has a browser
+-- subdir). The default install location is OS-specific, so check them all.
+function M.pw_installed()
+  local uv = vim.uv or vim.loop
   local cfg = require("ledger.config").get().builder or {}
-  local p = vim.fn.expand(cfg.pw_browsers_path or "~/.cache/ms-playwright")
-  return (vim.uv or vim.loop).fs_stat(p) ~= nil
-end
-
--- The "Run tests" button below the pipeline table; gated on the target being
--- READY, and on desktop the Playwright browser being installed.
-function M.runtests_button(st, tstate)
-  local cb = st.on_runtests and function()
-    st.on_runtests()
-  end or nil
-  if tstate ~= "ready" then
-    return { { "  ▶ Run tests", "LedgerStatePending", cb }, { "   (build the target first)", "LedgerBuilderDim" } }
+  local candidates = {}
+  if vim.env.PLAYWRIGHT_BROWSERS_PATH and vim.env.PLAYWRIGHT_BROWSERS_PATH ~= "" then
+    candidates[#candidates + 1] = vim.env.PLAYWRIGHT_BROWSERS_PATH
   end
-  if st.platform == "desktop" and not pw_installed() then
-    return {
-      { "  ⚠ Install Playwright browser", "LedgerStateStale", cb },
-      { "   (one-time, per machine)", "LedgerBuilderDim" },
-    }
+  if cfg.pw_browsers_path and cfg.pw_browsers_path ~= "" then
+    candidates[#candidates + 1] = vim.fn.expand(cfg.pw_browsers_path)
   end
-  return { { "  ▶ Run tests", "LedgerStateDone", cb }, { "   r", "LedgerBuilderKey" } }
+  candidates[#candidates + 1] = vim.fn.expand("~/Library/Caches/ms-playwright") -- macOS
+  candidates[#candidates + 1] = vim.fn.expand("~/.cache/ms-playwright") -- Linux
+  candidates[#candidates + 1] = vim.fn.expand("$USERPROFILE/AppData/Local/ms-playwright") -- Windows
+  for _, dir in ipairs(candidates) do
+    local it = uv.fs_scandir(dir)
+    if it and uv.fs_scandir_next(it) ~= nil then
+      return true
+    end
+  end
+  return false
 end
 
 function M.pipeline_content(st, inner_w)
@@ -284,6 +283,22 @@ function M.pipeline_content(st, inner_w)
     return { { string.rep("─", step_w + state_w + dur_w + 2), "LedgerSeparator" } }
   end
 
+  local tstate = require("ledger.builder.pipeline").target_state(steps, st.statuses or {})
+
+  local function row(bullet, bhl, col1, g, ghl, word, dur, cb)
+    local bw = vim.fn.strdisplaywidth(bullet)
+    local gw = vim.fn.strdisplaywidth(g)
+    return {
+      { bullet .. " ", bhl }, -- Step column (left-aligned)
+      { lpad(col1, step_w - bw - 1), "Normal", cb },
+      { " " },
+      { g .. " ", ghl }, -- State column (left-aligned)
+      { lpad(word, state_w - gw - 1), ghl },
+      { " " },
+      { lpad(dur, dur_w), "LedgerBuilderDim" },
+    }
+  end
+
   local tbl = { header(), rule() }
   for i, step in ipairs(steps) do
     local state = (st.statuses or {})[step.id] or "missing"
@@ -297,24 +312,44 @@ function M.pipeline_content(st, inner_w)
     else
       bullet, bhl = "✶", "LedgerYellow0"
     end
-    local bw = vim.fn.strdisplaywidth(bullet)
-    local gw = vim.fn.strdisplaywidth(g)
     local d = durs[step.template]
-    local dur = d and fmt_dur(d.duration) or "-"
-    tbl[#tbl + 1] = {
-      { bullet .. " ", bhl }, -- Step column (left-aligned)
-      { lpad(tostring(i) .. " " .. step.label, step_w - bw - 1), "Normal" },
-      { " " },
-      { g .. " ", ghl }, -- State column (left-aligned)
-      { lpad(STATE_WORD[state] or state, state_w - gw - 1), ghl },
-      { " " },
-      { lpad(dur, dur_w), "LedgerBuilderDim" },
-    }
+    tbl[#tbl + 1] = row(
+      bullet,
+      bhl,
+      tostring(i) .. " " .. step.label,
+      g,
+      ghl,
+      STATE_WORD[state] or state,
+      d and fmt_dur(d.duration) or "-"
+    )
   end
+
+  -- the navigable Run-tests row (pipeline row #steps+1): test devicon instead of
+  -- a number, star bullet, Enter/click runs the gated test action.
+  local rt_focused = st.focus and st.focus.col == "pipeline" and st.focus.idx == #steps + 1
+  local rt_icon = (cfg.test_icon and cfg.test_icon ~= "") and cfg.test_icon or "󰙨"
+  local rt_g, rt_word, rt_hl = "●", "ready", "LedgerStateDone"
+  if tstate ~= "ready" then
+    rt_g, rt_word, rt_hl = "○", "locked", "LedgerStatePending"
+  elseif st.platform == "desktop" and not M.pw_installed() then
+    rt_g, rt_word, rt_hl = "⚠", "setup pw", "LedgerStateStale"
+  end
+  local rt_dur = durs[st.platform == "desktop" and "desktop.pw.run" or "mobile.detox.test"]
+  tbl[#tbl + 1] = row(
+    rt_focused and "▶" or "✶",
+    rt_focused and "LedgerBuilderKey" or "LedgerYellow0",
+    rt_icon .. " Run tests",
+    rt_g,
+    rt_hl,
+    rt_word,
+    rt_dur and fmt_dur(rt_dur.duration) or "-",
+    st.on_runtests and function()
+      st.on_runtests()
+    end or nil
+  )
 
   -- global target state line (desktop · READY / IN PROGRESS / NOT READY)
   local target = st.platform == "desktop" and "desktop" or st.platform_flag
-  local tstate = require("ledger.builder.pipeline").target_state(steps, st.statuses or {})
   local tword = TARGET_WORD[tstate] or TARGET_WORD.not_ready
   local target_line = { { "  " .. target .. " · ", "LedgerBuilderDim" }, { tword[1], tword[2] } }
 
@@ -322,15 +357,13 @@ function M.pipeline_content(st, inner_w)
   for _, l in ipairs(tbl) do
     lines[#lines + 1] = l
   end
-  -- the Run-tests button lives below the table (testing is a separate action)
-  lines[#lines + 1] = {}
-  lines[#lines + 1] = M.runtests_button(st, tstate)
   return lines
 end
 
 -- Tiling: cards per row for n processes (cards grow to fill the pane).
 -- 1→[1]  2→[2]  3→[2,1]  4→[2,2]  then rows of 2 with a lone last card.
-local function tile(n)
+-- Exposed so the controller can drive 2-D navigation over the same grid.
+function M.proc_tile(n)
   if n <= 1 then
     return { 1 }
   elseif n == 2 then
@@ -352,6 +385,7 @@ local function tile(n)
   end
   return rows
 end
+local tile = M.proc_tile
 
 -- Processes as a grid of per-process cards that grow to fill the pane (w × h):
 -- title = name (state-colored, ▶ when focused), body = status, port/containers,

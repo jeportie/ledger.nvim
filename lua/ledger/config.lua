@@ -27,9 +27,13 @@ M.defaults = {
     -- TEMP (visual review only): seed the Stats panes with per-target mock data
     -- when there's no real history yet. Set false / remove once the look is approved.
     mock_stats = true,
-    -- where Playwright installs its browser binaries (once per machine); the
-    -- desktop "Run tests" button offers to install when this is missing.
-    pw_browsers_path = "~/.cache/ms-playwright",
+    -- where Playwright installs its browser binaries (once per machine). Leave
+    -- nil to auto-detect per OS ($PLAYWRIGHT_BROWSERS_PATH, then the OS default:
+    -- ~/Library/Caches/ms-playwright on macOS, ~/.cache/ms-playwright on Linux);
+    -- set a path to force it.
+    pw_browsers_path = nil,
+    -- the Run-tests pipeline row's icon (nf-md-test-tube by default).
+    test_icon = "󰙨",
     -- watcher command (w key) — Nx watch keeps the live libs rebuilt on change.
     watch_cmd = "pnpm nx watch --all -- pnpm nx build $NX_PROJECT_NAME",
     -- spinner.nvim patterns per role (see lua/ledger/builder/ui/spin.lua).
