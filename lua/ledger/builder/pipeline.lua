@@ -12,28 +12,49 @@
 
 local M = {}
 
--- Build-focused pipelines (running daemons live in the Processes pane, not
--- here). `optional=true` steps (clean / install) are off by default and shown
--- with a toggle; the controller's run-all only includes them when toggled on.
-
 -- Build-ready pipelines: each makes a target ready to TEST (testing itself is a
--- separate action — the "Run tests" button). `install` is diff-driven (its
--- status reflects whether node_modules is stale vs the lockfile). `clean` is a
--- maintenance action (run-all "clean + reinstall" / Fix menu), not a table step.
+-- separate action — the "Run tests" button). `clean` leads as an `optional`
+-- (non-gating) step that the controller flags "recommended" after a failure;
+-- `install` is diff-driven (its status reflects whether node_modules is stale
+-- vs the lockfile). Running daemons live in the Processes pane, not here.
 
--- Desktop (Playwright / Electron). `match` is a substring used to detect the
--- step's command running in ANY terminal (cross-session "in progress").
+-- `clean` runs `git clean -fdX` under `pnpm clean`, so detect either form.
+local CLEAN_MATCH = { "pnpm%S* clean", "git clean" }
+
+-- Desktop (Playwright / Electron). `match` is a Lua pattern (or a list of
+-- patterns) used to detect the step's command running in ANY terminal
+-- (cross-session "in progress"). `nx_project` ties a no-artifact build step to
+-- its Nx project so its done/failed + log can be read from the Nx cache.
 M.desktop = {
+  {
+    id = "clean",
+    label = "clean",
+    template = "shared.clean",
+    optional = true,
+    match = CLEAN_MATCH,
+  },
   {
     id = "install",
     label = "install deps",
     template = "desktop.install",
-    artifact = "node_modules",
+    artifact = "node_modules/.modules.yaml",
     sources = { "pnpm-lock.yaml" },
-    match = "pnpm i",
+    match = "pnpm%S* i",
   },
-  { id = "libs", label = "build:lld:deps", template = "desktop.build.deps", match = "build:lld:deps" },
-  { id = "cli", label = "build CLI", template = "desktop.build.cli", match = "build:cli" },
+  {
+    id = "libs",
+    label = "build:lld:deps",
+    template = "desktop.build.deps",
+    match = "build:lld:deps",
+    nx_project = "ledger-live-desktop",
+  },
+  {
+    id = "cli",
+    label = "build CLI",
+    template = "desktop.build.cli",
+    match = "build:cli",
+    nx_project = "@ledgerhq/live-cli",
+  },
   {
     id = "build",
     label = "build:testing",
@@ -46,15 +67,34 @@ M.desktop = {
 -- iOS (Detox debug — needs pods + Metro at run time).
 M.ios = {
   {
+    id = "clean",
+    label = "clean",
+    template = "shared.clean",
+    optional = true,
+    match = CLEAN_MATCH,
+  },
+  {
     id = "install",
     label = "install deps",
     template = "mobile.install",
-    artifact = "node_modules",
+    artifact = "node_modules/.modules.yaml",
     sources = { "pnpm-lock.yaml" },
-    match = "pnpm i",
+    match = "pnpm%S* i",
   },
-  { id = "libs", label = "build:llm:deps", template = "mobile.build.deps", match = "build:llm:deps" },
-  { id = "cli", label = "build CLI", template = "mobile.build.cli", match = "build:cli" },
+  {
+    id = "libs",
+    label = "build:llm:deps",
+    template = "mobile.build.deps",
+    match = "build:llm:deps",
+    nx_project = "live-mobile",
+  },
+  {
+    id = "cli",
+    label = "build CLI",
+    template = "mobile.build.cli",
+    match = "build:cli",
+    nx_project = "@ledgerhq/live-cli",
+  },
   {
     id = "pod",
     label = "pod install",
@@ -74,15 +114,34 @@ M.ios = {
 -- Android (Detox release — no pods, no Metro).
 M.android = {
   {
+    id = "clean",
+    label = "clean",
+    template = "shared.clean",
+    optional = true,
+    match = CLEAN_MATCH,
+  },
+  {
     id = "install",
     label = "install deps",
     template = "mobile.install",
-    artifact = "node_modules",
+    artifact = "node_modules/.modules.yaml",
     sources = { "pnpm-lock.yaml" },
-    match = "pnpm i",
+    match = "pnpm%S* i",
   },
-  { id = "libs", label = "build:llm:deps", template = "mobile.build.deps", match = "build:llm:deps" },
-  { id = "cli", label = "build CLI", template = "mobile.build.cli", match = "build:cli" },
+  {
+    id = "libs",
+    label = "build:llm:deps",
+    template = "mobile.build.deps",
+    match = "build:llm:deps",
+    nx_project = "live-mobile",
+  },
+  {
+    id = "cli",
+    label = "build CLI",
+    template = "mobile.build.cli",
+    match = "build:cli",
+    nx_project = "@ledgerhq/live-cli",
+  },
   {
     id = "build",
     label = "e2e:build android.emu.release",
@@ -146,17 +205,24 @@ local function resolve_sources(step, ctx)
   return out
 end
 
--- Step status: "missing" | "needs_update" | "done".
--- (The controller overlays "in_progress" when the step's task is running.)
+-- Step status: "missing" | "needs_update" | "done" | "failed".
+-- (The controller overlays "in_progress" when the step's task is running, and
+-- derives the clean step's "recommended" / "idle" from the others.)
 -- ctx = {
 --   root, config,
 --   detox_binary(config) -> rel path | nil,
 --   artifact_exists(abs) -> bool,
 --   is_stale(abs, abs_sources) -> bool,
 --   proc_alive(name) -> bool,
---   last_ok(template) -> true | false | nil,  -- last run succeeded? (no-artifact steps)
+--   last_result(step) -> { code, … } | nil,  -- last run: per-repo store, or the
+--                                             -- Nx cache for nx_project steps
 -- }
 function M.status(step, ctx)
+  -- A failed last run trumps everything (a stale artifact may still linger).
+  local res = ctx.last_result and ctx.last_result(step)
+  if res and res.code and res.code ~= 0 then
+    return "failed"
+  end
   if step.proc then
     return ctx.proc_alive(step.proc) and "done" or "missing"
   end
@@ -170,8 +236,8 @@ function M.status(step, ctx)
     end
     return "done"
   end
-  -- stateless step (clean / cli / libs / pw_setup / test): driven by last run
-  return (ctx.last_ok and ctx.last_ok(step.template)) and "done" or "missing"
+  -- stateless step (clean / cli / libs): driven by the last run's exit code
+  return (res and res.code == 0) and "done" or "missing"
 end
 
 -- Global state for the target, derived from per-step statuses.

@@ -90,6 +90,7 @@ local function refresh_statuses()
   local proc = require("ledger.builder.proc")
   local tasks = require("ledger.tasks")
   local detox = require("ledger.detox")
+  local nx = require("ledger.builder.nx")
   local persisted = require("ledger.builder.store").get(state.root) -- cross-session results
 
   state.steps = pipeline.steps(state.platform, {
@@ -102,6 +103,21 @@ local function refresh_statuses()
   local alive = {}
   for _, p in ipairs(state.procs) do
     alive[p.name] = p.alive
+  end
+  -- One Nx-cache read per distinct project per refresh, shared by the status
+  -- check (ctx.last_result) and the log auto-fetch below. `false` = queried, no
+  -- result (so we don't re-query); nil = not yet queried.
+  local nx_results = {}
+  local function nx_result_for(step)
+    if not step.nx_project then
+      return nil
+    end
+    local cached = nx_results[step.nx_project]
+    if cached == nil then
+      cached = nx.build_result(state.root, step.nx_project) or false
+      nx_results[step.nx_project] = cached
+    end
+    return cached or nil
   end
   local ctx = {
     root = state.root,
@@ -118,13 +134,10 @@ local function refresh_statuses()
     proc_alive = function(name)
       return alive[name] or false
     end,
-    last_ok = function(tmpl)
-      -- persisted (survives restarts + shared across sessions), not in-memory
-      local r = tmpl and persisted[tmpl]
-      if not r then
-        return nil
-      end
-      return r.code == 0
+    last_result = function(step)
+      -- Nx is authoritative for nx_project steps (covers builder + external
+      -- runs); else the per-repo store (builder-launched, shared across sessions).
+      return nx_result_for(step) or persisted[step.template]
     end,
   }
   -- steps whose command is running in ANY terminal (cross-session in-progress)
@@ -137,6 +150,40 @@ local function refresh_statuses()
       state.statuses[step.id] = pipeline.status(step, ctx)
     end
   end
+  -- clean: "recommended" when a build/install step failed (you must clean before
+  -- rebuilding); "idle" otherwise. "in_progress" (set above) always wins.
+  for _, step in ipairs(state.steps) do
+    if step.id == "clean" and state.statuses.clean ~= "in_progress" then
+      local any_failed = false
+      for _, s in ipairs(state.steps) do
+        if s.id ~= "clean" and state.statuses[s.id] == "failed" then
+          any_failed = true
+          break
+        end
+      end
+      state.statuses.clean = any_failed and "recommended" or "idle"
+    end
+  end
+  -- Auto-fetch builder/external Nx build logs into the Logs panel. The first
+  -- refresh only seeds (inject so focusing a step shows its log) without
+  -- stealing the panel; a hash change while open is a genuine completion → pop.
+  state.nx_seen = state.nx_seen or {}
+  local seeding = not state.nx_seeded
+  for _, step in ipairs(state.steps) do
+    local r = step.nx_project and nx_result_for(step)
+    if r and r.hash and state.nx_seen[step.template] ~= r.hash then
+      local lines = nx.log_lines(state.root, r.hash, 1000)
+      if lines and #lines > 0 then
+        tasks.inject(step.template, lines, r.code)
+        if not seeding then
+          tasks.last_started = step.template -- completion while open → pop the log
+          state.log_offset = 0
+        end
+      end
+      state.nx_seen[step.template] = r.hash
+    end
+  end
+  state.nx_seeded = true
   sync_focus()
 end
 
@@ -913,7 +960,8 @@ end
 
 -- Run every NOT-done step for the target in order, chaining on success and
 -- stopping on the first failure. mode "build" runs only steps whose status isn't
--- `done`; "clean" prepends a clean + forces every step. Tests are NEVER run here.
+-- `done` and SKIPS the clean step; "clean" forces every step (clean included,
+-- it's first). Tests are NEVER run here.
 local function run_all(mode)
   if not state.root then
     return
@@ -922,12 +970,13 @@ local function run_all(mode)
   local function add(label, template)
     seq[#seq + 1] = { label = label, template = template }
   end
-  if mode == "clean" then
-    add("clean", "shared.clean")
-  end
   for _, s in ipairs(state.steps or {}) do
-    if s.template and (mode == "clean" or (state.statuses or {})[s.id] ~= "done") then
-      add(s.label, s.template)
+    -- clean wipes everything (git clean -fdX); only the explicit
+    -- "clean + reinstall" mode runs it, never a plain build.
+    if not (s.id == "clean" and mode ~= "clean") then
+      if s.template and (mode == "clean" or (state.statuses or {})[s.id] ~= "done") then
+        add(s.label, s.template)
+      end
     end
   end
   if #seq == 0 then

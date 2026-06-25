@@ -188,6 +188,20 @@ function M.log_len(id)
   return r and #r.lines or 0
 end
 
+-- Seed a task record with externally-sourced output (e.g. an Nx build run in
+-- another terminal), keyed by `id` (a step template), so the Logs panel can
+-- show it through the same log_* readers. Marks the task finished with `code`.
+function M.inject(id, lines, code)
+  M.tasks[id] = {
+    lines = lines or {},
+    running = false,
+    code = code,
+    started = os.time(),
+    duration = 0,
+    external = true,
+  }
+end
+
 -- { code, duration } for a finished task, or nil.
 function M.last_result(id)
   local r = M.tasks[id]

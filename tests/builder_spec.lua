@@ -74,18 +74,20 @@ describe("ledger.builder.pipeline", function()
     end
   end
 
-  it("desktop pipeline is build-only (install→deps→cli→build), no test/pw/clean", function()
+  it("desktop pipeline is clean→install→deps→cli→build, no test/pw rows", function()
     local steps = pipeline.steps("desktop")
-    assert.equals("install", steps[1].id) -- starts at install (clean is not a table step)
+    assert.equals("clean", steps[1].id) -- clean leads the pipeline
     assert.equals("build", steps[#steps].id) -- ends at the build, not a test
     assert.is_nil(find(steps, "test"))
     assert.is_nil(find(steps, "pw_setup"))
-    assert.is_nil(find(steps, "clean"))
-    -- deps (libs) comes before the CLI
+    assert.is_truthy(find(steps, "clean"))
+    -- clean → install → libs → cli order
     local order = {}
     for i, s in ipairs(steps) do
       order[s.id] = i
     end
+    assert.is_true(order.clean < order.install)
+    assert.is_true(order.install < order.libs)
     assert.is_true(order.libs < order.cli)
   end)
 
@@ -100,14 +102,18 @@ describe("ledger.builder.pipeline", function()
     assert.equals("build", android[#android].id)
   end)
 
-  it("install is diff-driven (artifact node_modules vs the lockfile), no optional steps", function()
+  it("install is diff-driven (.modules.yaml vs the lockfile); only clean is optional", function()
     local steps = pipeline.steps("desktop")
     local install = find(steps, "install")
-    assert.equals("node_modules", install.artifact)
+    assert.equals("node_modules/.modules.yaml", install.artifact)
     assert.same({ "pnpm-lock.yaml" }, install.sources)
     assert.is_nil(install.optional)
     for _, s in ipairs(steps) do
-      assert.is_nil(s.optional) -- the table holds only required build-ready steps
+      if s.id == "clean" then
+        assert.is_true(s.optional) -- clean is the only optional (non-gating) step
+      else
+        assert.is_nil(s.optional)
+      end
     end
   end)
 
@@ -138,16 +144,16 @@ describe("ledger.builder.pipeline", function()
     assert.equals("done", pipeline.status(build, ctx()))
   end)
 
-  it("no-artifact step uses last_ok: done if the last run succeeded, else missing", function()
+  it("no-artifact step uses last_result: done on success, failed on error, else missing", function()
     local libs = find(pipeline.steps("desktop"), "libs")
-    assert.equals("missing", pipeline.status(libs, ctx())) -- no last_ok → never run
+    assert.equals("missing", pipeline.status(libs, ctx())) -- no result → never run
     assert.equals(
-      "missing",
+      "failed",
       pipeline.status(
         libs,
         ctx({
-          last_ok = function()
-            return false
+          last_result = function()
+            return { code = 1 }
           end,
         })
       )
@@ -157,12 +163,41 @@ describe("ledger.builder.pipeline", function()
       pipeline.status(
         libs,
         ctx({
-          last_ok = function()
-            return true
+          last_result = function()
+            return { code = 0 }
           end,
         })
       )
     )
+  end)
+
+  it("a failed last_result trumps a present artifact", function()
+    local build = find(pipeline.steps("mobile", { platform_flag = "ios" }), "build")
+    -- artifact_exists=true (ctx default), but the last run errored → failed
+    assert.equals(
+      "failed",
+      pipeline.status(
+        build,
+        ctx({
+          last_result = function()
+            return { code = 2 }
+          end,
+        })
+      )
+    )
+  end)
+
+  it("libs/cli carry their nx_project so done/failed can be read from Nx", function()
+    assert.equals("ledger-live-desktop", find(pipeline.steps("desktop"), "libs").nx_project)
+    assert.equals("@ledgerhq/live-cli", find(pipeline.steps("desktop"), "cli").nx_project)
+    assert.equals("live-mobile", find(pipeline.steps("mobile", { platform_flag = "ios" }), "libs").nx_project)
+  end)
+
+  it("clean is first, optional, runs shared.clean, matches pnpm/git clean", function()
+    local clean = find(pipeline.steps("desktop"), "clean")
+    assert.equals("shared.clean", clean.template)
+    assert.is_true(clean.optional)
+    assert.equals("table", type(clean.match)) -- a list of patterns
   end)
 
   it("target_state: not_ready / in_progress / ready over the step set", function()
@@ -174,7 +209,7 @@ describe("ledger.builder.pipeline", function()
       end
       return m
     end
-    -- every step is required now → ready only when all done
+    -- ready when every required step is done
     assert.equals("ready", pipeline.target_state(steps, all("done")))
     local missing = all("done")
     missing.install = "missing"
@@ -183,6 +218,10 @@ describe("ledger.builder.pipeline", function()
     local running = all("done")
     running.build = "in_progress"
     assert.equals("in_progress", pipeline.target_state(steps, running))
+    -- clean is optional → its state never gates "ready"
+    local clean_idle = all("done")
+    clean_idle.clean = "idle"
+    assert.equals("ready", pipeline.target_state(steps, clean_idle))
   end)
 
   it("resolves the detox-binary sentinel via ctx", function()
@@ -286,6 +325,23 @@ describe("ledger.builder.ui.panes", function()
     is_lines(panes.help_tabs(fake))
     is_lines(panes.help_shortcuts())
     is_lines(panes.help_commands(fake, 80))
+  end)
+
+  it("pipeline renders failed / recommended / idle words", function()
+    local st = vim.tbl_extend("force", {}, fake, {
+      platform = "desktop",
+      steps = {
+        { id = "clean", label = "clean", template = "shared.clean" },
+        { id = "install", label = "install deps", template = "desktop.install" },
+        { id = "libs", label = "build:lld:deps", template = "desktop.build.deps" },
+      },
+      statuses = { clean = "recommended", install = "idle", libs = "failed" },
+      focus = { col = "pipeline", idx = 1 },
+    })
+    local s = flat(panes.pipeline_content(st, 60))
+    assert.is_truthy(s:find("failed", 1, true))
+    assert.is_truthy(s:find("recommended", 1, true))
+    assert.is_truthy(s:find("—", 1, true)) -- idle renders as an em dash
   end)
 
   it("wrong-folder banner shows the cwd path", function()

@@ -20,6 +20,10 @@ local function glyph(s, tick, hlmod)
     return "~", "LedgerStateStale"
   elseif s == "failed" then
     return "✗", "LedgerStateFailed"
+  elseif s == "recommended" then
+    return "⚠", "LedgerStateStale"
+  elseif s == "idle" then
+    return "·", "LedgerBuilderDim"
   end
   return "○", "LedgerStatePending" -- missing / pending
 end
@@ -177,10 +181,12 @@ local STATE_WORD = {
   in_progress = "in progress",
   needs_update = "needs update",
   missing = "missing",
+  failed = "failed",
+  recommended = "recommended",
+  idle = "—",
   -- legacy aliases (in case any old status leaks through)
   running = "in progress",
   stale = "needs update",
-  failed = "missing",
   pending = "missing",
   ready = "missing",
 }
