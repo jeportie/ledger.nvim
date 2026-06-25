@@ -21,7 +21,8 @@ local M = {}
 -- status reflects whether node_modules is stale vs the lockfile). `clean` is a
 -- maintenance action (run-all "clean + reinstall" / Fix menu), not a table step.
 
--- Desktop (Playwright / Electron).
+-- Desktop (Playwright / Electron). `match` is a substring used to detect the
+-- step's command running in ANY terminal (cross-session "in progress").
 M.desktop = {
   {
     id = "install",
@@ -29,9 +30,10 @@ M.desktop = {
     template = "desktop.install",
     artifact = "node_modules",
     sources = { "pnpm-lock.yaml" },
+    match = "pnpm i",
   },
-  { id = "libs", label = "build:lld:deps", template = "desktop.build.deps" },
-  { id = "cli", label = "build CLI", template = "desktop.build.cli" },
+  { id = "libs", label = "build:lld:deps", template = "desktop.build.deps", match = "build:lld:deps" },
+  { id = "cli", label = "build CLI", template = "desktop.build.cli", match = "build:cli" },
   {
     id = "build",
     label = "build:testing",
@@ -49,14 +51,16 @@ M.ios = {
     template = "mobile.install",
     artifact = "node_modules",
     sources = { "pnpm-lock.yaml" },
+    match = "pnpm i",
   },
-  { id = "libs", label = "build:llm:deps", template = "mobile.build.deps" },
-  { id = "cli", label = "build CLI", template = "mobile.build.cli" },
+  { id = "libs", label = "build:llm:deps", template = "mobile.build.deps", match = "build:llm:deps" },
+  { id = "cli", label = "build CLI", template = "mobile.build.cli", match = "build:cli" },
   {
     id = "pod",
     label = "pod install",
     template = "mobile.pod",
     artifact = "apps/ledger-live-mobile/ios/Podfile.lock",
+    match = "mobile pod",
   },
   {
     id = "build",
@@ -75,9 +79,10 @@ M.android = {
     template = "mobile.install",
     artifact = "node_modules",
     sources = { "pnpm-lock.yaml" },
+    match = "pnpm i",
   },
-  { id = "libs", label = "build:llm:deps", template = "mobile.build.deps" },
-  { id = "cli", label = "build CLI", template = "mobile.build.cli" },
+  { id = "libs", label = "build:llm:deps", template = "mobile.build.deps", match = "build:llm:deps" },
+  { id = "cli", label = "build CLI", template = "mobile.build.cli", match = "build:cli" },
   {
     id = "build",
     label = "e2e:build android.emu.release",
@@ -107,10 +112,12 @@ function M.steps(platform, opts)
       if platform == "mobile" then
         local cfg = opts.config or (opts.platform_flag == "android" and "android.emu.release" or "ios.sim.debug")
         s.label = "e2e:build " .. cfg
+        s.match = "e2e:build"
       else
         local profile = opts.desktop_build or "testing"
         s.label = "build:" .. profile
         s.template = "desktop.build." .. profile
+        s.match = "build:" .. profile
       end
     end
   end

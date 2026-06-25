@@ -127,9 +127,11 @@ local function refresh_statuses()
       return r.code == 0
     end,
   }
+  -- steps whose command is running in ANY terminal (cross-session in-progress)
+  local running = require("ledger.builder.running").running_steps(state.steps)
   state.statuses = {}
   for _, step in ipairs(state.steps) do
-    if step.template and tasks.is_running(step.template) then
+    if (step.template and tasks.is_running(step.template)) or running[step.id] then
       state.statuses[step.id] = "in_progress"
     else
       state.statuses[step.id] = pipeline.status(step, ctx)
@@ -145,14 +147,13 @@ local function refresh_runtime()
   local proc = require("ledger.builder.proc")
   local tasks = require("ledger.tasks")
   state.procs = proc.for_platform(state.platform, state.platform_flag)
+  local running = require("ledger.builder.running").running_steps(state.steps)
   local finished = false
   for _, step in ipairs(state.steps or {}) do
-    if step.template then
-      if tasks.is_running(step.template) then
-        state.statuses[step.id] = "in_progress"
-      elseif state.statuses[step.id] == "in_progress" then
-        finished = true -- a running step just finished → re-evaluate artifacts
-      end
+    if (step.template and tasks.is_running(step.template)) or running[step.id] then
+      state.statuses[step.id] = "in_progress"
+    elseif state.statuses[step.id] == "in_progress" then
+      finished = true -- a running step (ours or external) just finished → re-evaluate
     end
   end
   if finished then

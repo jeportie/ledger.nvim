@@ -319,6 +319,16 @@ for _, t in ipairs(M.templates) do
   M.by_id[t.id] = t
 end
 
+-- Force plain, streamed output from Nx/turbo so the Builder Logs read cleanly
+-- (jobstart is non-TTY; these belt-and-suspenders the static output style).
+-- NOTE: adjust to your Nx/turbo version if needed.
+local NX_PLAIN = {
+  NX_TUI = "false",
+  NX_TASKS_RUNNER_DYNAMIC_OUTPUT = "false",
+  TURBO_UI = "false",
+  FORCE_COLOR = "0",
+}
+
 -- Resolve a template id + opts into a concrete spec. `root` defaults to the
 -- live repo root; pass it explicitly for pure/testable resolution.
 function M.resolve(id, opts, root)
@@ -331,6 +341,11 @@ function M.resolve(id, opts, root)
     root = require("ledger.detox").get_repo_root()
   end
   local cmd = type(t.cmd) == "function" and t.cmd(opts) or t.cmd
+  local env = t.env and vim.deepcopy(t.env) or nil
+  if t.kind == "build" or t.kind == "install" then
+    -- build/install run via Nx/turbo → force readable streamed output in the Logs
+    env = vim.tbl_extend("force", {}, NX_PLAIN, env or {})
+  end
   return {
     id = t.id,
     label = t.label,
@@ -338,7 +353,7 @@ function M.resolve(id, opts, root)
     kind = t.kind,
     cmd = cmd,
     cwd = M.resolve_cwd(t.cwd, root),
-    env = t.env and vim.deepcopy(t.env) or nil,
+    env = env,
     daemon = t.daemon or false,
     artifact = t.artifact and (root .. "/" .. t.artifact) or nil,
   }
