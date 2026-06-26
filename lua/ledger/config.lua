@@ -32,8 +32,10 @@ M.defaults = {
     -- ~/Library/Caches/ms-playwright on macOS, ~/.cache/ms-playwright on Linux);
     -- set a path to force it.
     pw_browsers_path = nil,
-    -- the Run-tests pipeline row's icon (nf-md-test-tube by default).
-    test_icon = "󰙨",
+    -- the Run-tests pipeline row's icon (nf-md-flask).
+    test_icon = "󰂓",
+    -- the clean step's bullet icon (nf-md-broom) — shown instead of a number.
+    clean_icon = "󰃢",
     -- watcher command (w key) — Nx watch keeps the live libs rebuilt on change.
     watch_cmd = "pnpm nx watch --all -- pnpm nx build $NX_PROJECT_NAME",
     -- spinner.nvim patterns per role (see lua/ledger/builder/ui/spin.lua).

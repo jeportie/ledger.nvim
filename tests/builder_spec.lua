@@ -415,7 +415,42 @@ describe("ledger.builder.ui.panes", function()
     assert.is_truthy(s:find("▶", 1, true))
     -- the Run-tests row is the last pipeline row (test devicon + "Run tests")
     assert.is_truthy(s:find("Run tests", 1, true))
-    assert.is_truthy(s:find("󰙨", 1, true)) -- the test icon (default test_icon)
+    assert.is_truthy(s:find("󰂓", 1, true)) -- the test icon (default test_icon, nf-md-flask)
+  end)
+
+  it("progress bar counts only required steps; clean shows the broom + steps renumber", function()
+    local pl = require("ledger.builder.pipeline")
+    local steps = pl.steps("desktop") -- clean, install, libs, cli, build
+    local statuses = {}
+    for _, st in ipairs(steps) do
+      statuses[st.id] = "done"
+    end
+    local s = flat(
+      panes.pipeline_content(
+        vim.tbl_extend("force", {}, fake, { platform = "desktop", steps = steps, statuses = statuses }),
+        70
+      )
+    )
+    assert.is_truthy(s:find("4/4", 1, true)) -- 4 required steps; clean excluded (not 5/5)
+    assert.is_truthy(s:find("󰃢 clean", 1, true)) -- clean leads with the broom, not a number
+    assert.is_truthy(s:find("1 install deps", 1, true)) -- real steps renumber from 1
+    assert.is_truthy(s:find("2 build:lld:deps", 1, true))
+  end)
+
+  it("a blank line separates the build steps from the Run-tests row", function()
+    local pl = require("ledger.builder.pipeline")
+    local lines = panes.pipeline_content(
+      vim.tbl_extend("force", {}, fake, { platform = "desktop", steps = pl.steps("desktop"), statuses = {} }),
+      70
+    )
+    local rt
+    for i, l in ipairs(lines) do
+      if flat({ l }):find("Run tests", 1, true) then
+        rt = i
+      end
+    end
+    assert.is_truthy(rt)
+    assert.same({}, lines[rt - 1]) -- the row immediately above Run-tests is blank
   end)
 
   it("pipeline cells are left-aligned with uniform widths across targets", function()

@@ -69,32 +69,97 @@ function M.build_result(root, project, runner)
   return parse_row((runner or default_runner)(db, sql))
 end
 
--- The captured terminal output for a task hash, ANSI-stripped, last `max` lines.
-function M.log_lines(root, hash, max)
-  if not root or not hash then
-    return {}
-  end
-  local ok, raw = pcall(vim.fn.readfile, root .. "/.nx/cache/terminalOutputs/" .. hash)
+-- Read a file, ANSI-strip each line, drop blanks. {} on any failure.
+local function read_stripped(path)
+  local ok, raw = pcall(vim.fn.readfile, path)
   if not ok or type(raw) ~= "table" then
     return {}
   end
   local strip = require("ledger.tasks").strip_ansi
-  local lines = {}
+  local out = {}
   for _, line in ipairs(raw) do
     local s = strip(line)
     if s ~= "" then
+      out[#out + 1] = s
+    end
+  end
+  return out
+end
+
+-- Keep the last `max` lines (the tail — where build summaries / errors land).
+local function tail(lines, max)
+  max = max or 2000
+  if #lines <= max then
+    return lines
+  end
+  local out = {}
+  for i = #lines - max + 1, #lines do
+    out[#out + 1] = lines[i]
+  end
+  return out
+end
+
+-- The captured output for a SINGLE task hash (the leaf-task fallback),
+-- ANSI-stripped, last `max` lines.
+function M.log_lines(root, hash, max)
+  if not root or not hash then
+    return {}
+  end
+  return tail(read_stripped(root .. "/.nx/cache/terminalOutputs/" .. hash), max or 1000)
+end
+
+-- The most recent `nx` invocation, from .nx/cache/run.json, IF it targeted
+-- `project` (run.command names it). Returns { id, hashes }: `id` (the run's
+-- endTime) changes when a new build completes; `hashes` are the run's task
+-- hashes ordered by start time. nil otherwise (latest run is a different
+-- project, or no run.json). One cheap JSON read.
+function M.run_meta(root, project)
+  if not root or not project or project == "" then
+    return nil
+  end
+  local ok0, raw = pcall(vim.fn.readfile, root .. "/.nx/cache/run.json")
+  if not ok0 or type(raw) ~= "table" or #raw == 0 then
+    return nil
+  end
+  local ok, data = pcall(vim.json.decode, table.concat(raw, "\n"))
+  if not ok or type(data) ~= "table" or type(data.run) ~= "table" then
+    return nil
+  end
+  if not (data.run.command or ""):find(project, 1, true) then
+    return nil
+  end
+  local ordered = {}
+  for _, t in ipairs(data.tasks or {}) do
+    if t.hash then
+      ordered[#ordered + 1] = { hash = t.hash, at = t.startTime or "" }
+    end
+  end
+  table.sort(ordered, function(a, b)
+    return a.at < b.at
+  end)
+  local hashes = {}
+  for _, t in ipairs(ordered) do
+    hashes[#hashes + 1] = t.hash
+  end
+  if #hashes == 0 then
+    return nil
+  end
+  return { id = tostring(data.run.endTime or data.run.startTime or #hashes), hashes = hashes }
+end
+
+-- Concatenate the per-task logs for a whole `nx run-many` build (each file
+-- self-labels with `> nx run <taskId>`), ANSI-stripped, last `max` lines.
+function M.concat_logs(root, hashes, max)
+  if not root or type(hashes) ~= "table" then
+    return {}
+  end
+  local lines = {}
+  for _, hash in ipairs(hashes) do
+    for _, s in ipairs(read_stripped(root .. "/.nx/cache/terminalOutputs/" .. hash)) do
       lines[#lines + 1] = s
     end
   end
-  max = max or 1000
-  if #lines > max then
-    local out = {}
-    for i = #lines - max + 1, #lines do
-      out[#out + 1] = lines[i]
-    end
-    return out
-  end
-  return lines
+  return tail(lines, max or 2000)
 end
 
 return M

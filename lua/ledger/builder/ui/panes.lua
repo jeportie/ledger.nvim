@@ -254,13 +254,17 @@ function M.pipeline_content(st, inner_w)
   local steps = st.steps or {}
   local durs = require("ledger.builder.store").get(st.root) -- persisted per-template durations
 
-  local done = 0
+  -- progress counts only required steps (clean is optional → not a build gate)
+  local done, total = 0, 0
   for _, s in ipairs(steps) do
-    if (st.statuses or {})[s.id] == "done" then
-      done = done + 1
+    if not s.optional then
+      total = total + 1
+      if (st.statuses or {})[s.id] == "done" then
+        done = done + 1
+      end
     end
   end
-  local pct = #steps > 0 and math.floor((done / #steps) * 100) or 0
+  local pct = total > 0 and math.floor((done / total) * 100) or 0
   local bar = ui.progressbar({
     w = math.max(8, inner_w - 12),
     val = pct,
@@ -268,7 +272,7 @@ function M.pipeline_content(st, inner_w)
     hl = { on = "LedgerGreen0", off = "LedgerSeparator" },
   })
   table.insert(bar, 1, { "  " })
-  bar[#bar + 1] = { "  " .. done .. "/" .. #steps, "LedgerLabel" }
+  bar[#bar + 1] = { "  " .. done .. "/" .. total, "LedgerLabel" }
 
   -- A hand-rolled table with FIXED column widths (identical across targets) and
   -- LEFT-aligned Step/State cells. (voltui.table centers + auto-sizes per content,
@@ -305,7 +309,9 @@ function M.pipeline_content(st, inner_w)
     }
   end
 
+  local clean_icon = (cfg.clean_icon and cfg.clean_icon ~= "") and cfg.clean_icon or "󰃢"
   local tbl = { header(), rule() }
+  local num = 0
   for i, step in ipairs(steps) do
     local state = (st.statuses or {})[step.id] or "missing"
     local g, ghl = glyph(state, st.tick or 0, state == "in_progress" and hl.pulse or nil)
@@ -318,16 +324,18 @@ function M.pipeline_content(st, inner_w)
     else
       bullet, bhl = "✶", "LedgerYellow0"
     end
+    -- clean leads with the broom icon (like the Run-tests row's icon); the real
+    -- build steps are numbered 1..N.
+    local lead
+    if step.id == "clean" then
+      lead = clean_icon
+    else
+      num = num + 1
+      lead = tostring(num)
+    end
     local d = durs[step.template]
-    tbl[#tbl + 1] = row(
-      bullet,
-      bhl,
-      tostring(i) .. " " .. step.label,
-      g,
-      ghl,
-      STATE_WORD[state] or state,
-      d and fmt_dur(d.duration) or "-"
-    )
+    tbl[#tbl + 1] =
+      row(bullet, bhl, lead .. " " .. step.label, g, ghl, STATE_WORD[state] or state, d and fmt_dur(d.duration) or "-")
   end
 
   -- the navigable Run-tests row (pipeline row #steps+1): test devicon instead of
@@ -341,6 +349,7 @@ function M.pipeline_content(st, inner_w)
     rt_g, rt_word, rt_hl = "⚠", "setup pw", "LedgerStateStale"
   end
   local rt_dur = durs[st.platform == "desktop" and "desktop.pw.run" or "mobile.detox.test"]
+  tbl[#tbl + 1] = {} -- a blank line separating the build steps from the Run-tests action
   tbl[#tbl + 1] = row(
     rt_focused and "▶" or "✶",
     rt_focused and "LedgerBuilderKey" or "LedgerYellow0",
@@ -751,6 +760,7 @@ function M.help_shortcuts()
     row("d", "Speculos device dropdown"),
     row("F", "fix / maintenance", "reinstall · iOS pods · clean"),
     row("R", "refresh staleness + liveness"),
+    row("n", "nx actions (Telescope)", "hides Builder · runs any nx target"),
     {},
     { { "  View", "LedgerBuilderTitle" } },
     row("wheel / C-u C-d", "scroll the Logs pane"),

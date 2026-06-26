@@ -70,4 +70,33 @@ describe("ledger.builder.nx", function()
     vim.fn.writefile(many, root .. "/.nx/cache/terminalOutputs/big")
     assert.equals(10, #nx.log_lines(root, "big", 10))
   end)
+
+  it("run_meta filters by project and orders task hashes by startTime", function()
+    local run = {
+      run = { command = "nx run-many -t build -p @ledgerhq/live-cli", endTime = "2026-06-26T07:37:09Z" },
+      tasks = {
+        { hash = "b", startTime = "2026-06-26T07:37:02Z" },
+        { hash = "a", startTime = "2026-06-26T07:37:01Z" },
+        { hash = "c", startTime = "2026-06-26T07:37:03Z" },
+      },
+    }
+    vim.fn.writefile({ vim.json.encode(run) }, root .. "/.nx/cache/run.json")
+    local meta = nx.run_meta(root, "@ledgerhq/live-cli")
+    assert.same({ "a", "b", "c" }, meta.hashes) -- ordered by startTime
+    assert.equals("2026-06-26T07:37:09Z", meta.id)
+    -- the latest run was a different project → nil (caller falls back to leaf)
+    assert.is_nil(nx.run_meta(root, "ledger-live-desktop"))
+  end)
+
+  it("run_meta is nil when there's no run.json", function()
+    assert.is_nil(nx.run_meta(vim.fn.tempname(), "x"))
+  end)
+
+  it("concat_logs joins multiple task logs (ANSI-stripped) and caps to max", function()
+    vim.fn.writefile({ "> nx run a:build", "\27[32mok A\27[39m" }, root .. "/.nx/cache/terminalOutputs/a")
+    vim.fn.writefile({ "> nx run b:build", "ok B" }, root .. "/.nx/cache/terminalOutputs/b")
+    assert.same({ "> nx run a:build", "ok A", "> nx run b:build", "ok B" }, nx.concat_logs(root, { "a", "b" }))
+    assert.equals(2, #nx.concat_logs(root, { "a", "b" }, 2)) -- cap keeps the tail across files
+    assert.same({}, nx.concat_logs(root, {}))
+  end)
 end)

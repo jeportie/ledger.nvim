@@ -164,23 +164,31 @@ local function refresh_statuses()
       state.statuses.clean = any_failed and "recommended" or "idle"
     end
   end
-  -- Auto-fetch builder/external Nx build logs into the Logs panel. The first
-  -- refresh only seeds (inject so focusing a step shows its log) without
-  -- stealing the panel; a hash change while open is a genuine completion → pop.
+  -- Auto-fetch builder/external Nx build logs into the Logs panel. Prefer the
+  -- FULL run-many log (all task outputs, via run.json); fall back to the leaf
+  -- task's log when the latest run was a different project (e.g. opening over an
+  -- older build). The first refresh only seeds (inject so focusing a step shows
+  -- its log) without stealing the panel; a change while open is a genuine
+  -- completion → pop the panel to it.
   state.nx_seen = state.nx_seen or {}
   local seeding = not state.nx_seeded
   for _, step in ipairs(state.steps) do
-    local r = step.nx_project and nx_result_for(step)
-    if r and r.hash and state.nx_seen[step.template] ~= r.hash then
-      local lines = nx.log_lines(state.root, r.hash, 1000)
-      if lines and #lines > 0 then
-        tasks.inject(step.template, lines, r.code)
-        if not seeding then
-          tasks.last_started = step.template -- completion while open → pop the log
-          state.log_offset = 0
+    if step.nx_project then
+      local res = nx_result_for(step) -- { code, hash } | nil  (status, from the db)
+      local meta = nx.run_meta(state.root, step.nx_project) -- full-run meta | nil
+      local key = (meta and "run:" .. meta.id) or (res and res.hash and "leaf:" .. res.hash)
+      if key and state.nx_seen[step.template] ~= key then
+        local lines = (meta and nx.concat_logs(state.root, meta.hashes, 2000))
+          or (res and res.hash and nx.log_lines(state.root, res.hash, 2000))
+        if lines and #lines > 0 then
+          tasks.inject(step.template, lines, res and res.code)
+          if not seeding then
+            tasks.last_started = step.template -- completion while open → pop the log
+            state.log_offset = 0
+          end
         end
+        state.nx_seen[step.template] = key
       end
-      state.nx_seen[step.template] = r.hash
     end
   end
   state.nx_seeded = true
@@ -371,8 +379,8 @@ local function compute_dims()
     #pl.steps("mobile", { platform_flag = "ios" }),
     #pl.steps("mobile", { platform_flag = "android" })
   )
-  -- blank+target+blank+bar+blank (5) + table(header+rule+steps+run-tests row = 3+steps)
-  state.top_h = 8 + max_steps
+  -- blank+target+blank+bar+blank (5) + table(header+rule+steps+blank+run-tests = 4+steps)
+  state.top_h = 9 + max_steps
   -- chrome ≈ header(6) + top borders(2) + separator(1) + bottom borders(2) + footer(1) + margin
   state.bottom_h = math.max(8, math.min(16, vim.o.lines - state.top_h - 13))
   -- shared row width so the logs/stats row aligns exactly with the top row:
@@ -1189,6 +1197,17 @@ local function set_keymaps()
   map("e", pick_env)
   map("d", pick_device)
   map("A", run_all_menu)
+  -- nx.nvim launcher: hide the Builder, then open its Telescope picker to run an
+  -- arbitrary nx target. nx.nvim runs it in a :terminal — no status/log feedback
+  -- here (it captures nothing); the pipeline keeps tracking real builds via .nx.
+  map("n", function()
+    M.hide()
+    vim.schedule(function()
+      if not pcall(vim.cmd, "Telescope nx actions") then
+        vim.notify("nx.nvim / telescope not available", vim.log.levels.WARN)
+      end
+    end)
+  end)
   -- log scroll (mouse wheel + Ctrl-u/d), active only when Logs is shown
   map("<ScrollWheelUp>", function()
     scroll(3)
