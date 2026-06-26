@@ -866,8 +866,8 @@ local function nx_pick_project(prompt, cb)
   end)
 end
 
--- Target a specific project for a build or scoped install (runs through the
--- Builder, so status + logs update like any step).
+-- Build a specific nx project (current file's / picked / by filter). Runs through
+-- the Builder as a sub-step under `libs`, so status + logs update like any step.
 local function target_menu()
   if not state.root then
     return
@@ -876,10 +876,8 @@ local function target_menu()
     "Build current file's project",
     "Build project…",
     "Build by filter…",
-    "Install project…",
-    "Install by filter…",
   }
-  open_menu("Target a project", items, nil, function(c)
+  open_menu("Build a project", items, nil, function(c)
     if c == "Build current file's project" then
       local f = vim.fn.expand("#:p") -- the file edited before the Builder took focus
       local proj = f ~= "" and require("ledger.builder.nx").project_for_file(state.root, f) or nil
@@ -896,16 +894,6 @@ local function target_menu()
       vim.ui.input({ prompt = "Build -p filter: " }, function(f)
         if f and f ~= "" then
           add_substep("libs", { template = "shared.nx.build", label = f, filter = f })
-        end
-      end)
-    elseif c == "Install project…" then
-      nx_pick_project("Install nx project deps:", function(p)
-        add_substep("install", { template = "shared.install.scoped", label = p, projects = { p } })
-      end)
-    elseif c == "Install by filter…" then
-      vim.ui.input({ prompt = "Install --filter: " }, function(f)
-        if f and f ~= "" then
-          add_substep("install", { template = "shared.install.scoped", label = f, filter = f })
         end
       end)
     end

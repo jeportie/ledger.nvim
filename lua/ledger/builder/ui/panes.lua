@@ -796,7 +796,7 @@ function M.help_shortcuts()
     row("A", "run all (build)", "Run all · Clean + reinstall"),
     row("r", "run tests", "active when target is READY"),
     row("w", "watch menu", "on-save · nx daemon · off"),
-    row("t", "target a project", "build / install one project"),
+    row("t", "build a project", "current file / picked / filter"),
     row("z", "fold sub-steps", "show / hide per-project rebuilds"),
     row("B", "build", "→ desktop build:* / detox e2e:build"),
     row("x / s", "kill / start focused process"),

@@ -292,29 +292,12 @@ M.templates = {
     kind = "build",
     cwd = "repo",
     -- Targeted build: `opts.projects` (a list) or `opts.filter` (a raw -p glob).
+    -- `--excludeTaskDependencies` builds ONLY the named project(s), not their
+    -- dependency graph — the libs/build:lld:deps step does the full graph build;
+    -- this is the fast, incremental single-project path for watch + targeting.
     cmd = function(opts)
       local sel = (opts.filter and opts.filter ~= "" and opts.filter) or table.concat(opts.projects or {}, " ")
-      return "pnpm nx run-many -t build -p " .. sel
-    end,
-  },
-  {
-    id = "shared.install.scoped",
-    label = "Install · targeted deps",
-    platform = "shared",
-    kind = "install",
-    cwd = "repo",
-    -- Scoped install: deps for `opts.projects` (each via --filter="<p>...") or a
-    -- raw `opts.filter`. Non-interactive (no TTY) like the per-platform installs.
-    cmd = function(opts)
-      local base = "pnpm i --config.confirm-modules-purge=false"
-      if opts.filter and opts.filter ~= "" then
-        return base .. ' --filter="' .. opts.filter .. '"'
-      end
-      local parts = { base }
-      for _, p in ipairs(opts.projects or {}) do
-        parts[#parts + 1] = '--filter="' .. p .. '..."'
-      end
-      return table.concat(parts, " ")
+      return "pnpm nx run-many -t build -p " .. sel .. " --excludeTaskDependencies"
     end,
   },
   {
