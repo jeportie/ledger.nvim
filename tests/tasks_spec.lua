@@ -44,6 +44,20 @@ describe("ledger.tasks.templates", function()
     end
   end)
 
+  it("scoped build/install templates target chosen projects", function()
+    assert.equals(
+      "pnpm nx run-many -t build -p @ledgerhq/live-common @ledgerhq/coin-evm",
+      templates.resolve("shared.nx.build", { projects = { "@ledgerhq/live-common", "@ledgerhq/coin-evm" } }, ROOT).cmd
+    )
+    assert.equals(
+      "pnpm nx run-many -t build -p @ledgerhq/coin-*",
+      templates.resolve("shared.nx.build", { filter = "@ledgerhq/coin-*" }, ROOT).cmd
+    )
+    local inst = templates.resolve("shared.install.scoped", { projects = { "@ledgerhq/live-common" } }, ROOT).cmd
+    assert.is_truthy(inst:find("--config.confirm-modules-purge=false", 1, true))
+    assert.is_truthy(inst:find('--filter="@ledgerhq/live-common..."', 1, true))
+  end)
+
   describe("parametric commands", function()
     it("detox build prefixes pod for iOS only", function()
       assert.equals(

@@ -99,7 +99,7 @@ local function refresh_statuses()
     desktop_build = state.desktop_build,
   })
   state.procs = proc.for_platform(state.platform, state.platform_flag)
-  state.watching = tasks.is_running("shared.nx.watch")
+  state.watching = (state.watch_mode == "on-save") or (state.watch_mode == "nx" and tasks.is_running("shared.nx.watch"))
   local alive = {}
   for _, p in ipairs(state.procs) do
     alive[p.name] = p.alive
@@ -714,6 +714,130 @@ local function pick_pwdebug()
   redraw("all")
 end
 
+-- ── watch + per-project targeting ───────────────────────────────────────────
+
+-- Switch the watch mode: "on-save" (Neovim rebuilds the saved file's nx project
+-- via the BufWritePost autocmd — daemon-free), "nx" (the nx watch daemon, which
+-- needs NX_DAEMON=true here), or "off".
+local function set_watch_mode(mode)
+  if not state.root then
+    return
+  end
+  local tasks = require("ledger.tasks")
+  if mode == "nx" then
+    if not tasks.is_running("shared.nx.watch") then
+      tasks.run("shared.nx.watch", { root = state.root })
+    end
+  elseif tasks.is_running("shared.nx.watch") then
+    tasks.stop("shared.nx.watch") -- leaving nx mode → stop the daemon
+  end
+  state.watch_mode = mode
+  state.watching = mode ~= "off"
+  redraw("all")
+end
+
+local function watch_menu()
+  if not state.root then
+    return
+  end
+  local cur = state.watch_mode == "nx" and "nx watch (daemon)" or state.watch_mode
+  open_menu("Watch", { "on-save", "nx watch (daemon)", "off" }, cur, function(c)
+    set_watch_mode(c:find("^nx") and "nx" or (c == "off" and "off" or "on-save"))
+  end)
+end
+
+-- On-save incremental rebuild: rebuild just the nx project owning the saved
+-- file. Debounced per project (reuses the prefetch.lua tick pattern).
+local _watch_ticks = {}
+local function on_save_rebuild(abspath)
+  if not (state and state.root and state.watch_mode == "on-save") then
+    return
+  end
+  local proj = require("ledger.builder.nx").project_for_file(state.root, abspath)
+  if not proj then
+    return
+  end
+  _watch_ticks[proj] = (_watch_ticks[proj] or 0) + 1
+  local tick = _watch_ticks[proj]
+  vim.defer_fn(function()
+    if _watch_ticks[proj] ~= tick or not (state and state.root and state.watch_mode == "on-save") then
+      return
+    end
+    require("ledger.tasks").run("shared.nx.build", { root = state.root, projects = { proj } })
+    vim.defer_fn(function()
+      if state and state.win and vim.api.nvim_win_is_valid(state.win) then
+        refresh_statuses()
+        redraw("all")
+      end
+    end, 300)
+  end, 400)
+end
+
+-- Pick one nx project via vim.ui.select (routes to the user's Telescope UI).
+local function nx_pick_project(prompt, cb)
+  local projects = require("ledger.builder.nx").projects(state.root)
+  if #projects == 0 then
+    vim.notify("Builder: no nx project graph yet — build once, then retry", vim.log.levels.WARN)
+    return
+  end
+  local names = {}
+  for _, p in ipairs(projects) do
+    names[#names + 1] = p.name
+  end
+  table.sort(names)
+  vim.ui.select(names, { prompt = prompt }, function(choice)
+    if choice and choice ~= "" then
+      cb(choice)
+    end
+  end)
+end
+
+-- Target a specific project for a build or scoped install (runs through the
+-- Builder, so status + logs update like any step).
+local function target_menu()
+  if not state.root then
+    return
+  end
+  local items = {
+    "Build current file's project",
+    "Build project…",
+    "Build by filter…",
+    "Install project…",
+    "Install by filter…",
+  }
+  open_menu("Target a project", items, nil, function(c)
+    if c == "Build current file's project" then
+      local f = vim.fn.expand("#:p") -- the file edited before the Builder took focus
+      local proj = f ~= "" and require("ledger.builder.nx").project_for_file(state.root, f) or nil
+      if not proj then
+        vim.notify("Builder: the previous buffer isn't inside an nx project", vim.log.levels.WARN)
+        return
+      end
+      M.run_template("shared.nx.build", { projects = { proj } })
+    elseif c == "Build project…" then
+      nx_pick_project("Build nx project:", function(p)
+        M.run_template("shared.nx.build", { projects = { p } })
+      end)
+    elseif c == "Build by filter…" then
+      vim.ui.input({ prompt = "Build -p filter: " }, function(f)
+        if f and f ~= "" then
+          M.run_template("shared.nx.build", { filter = f })
+        end
+      end)
+    elseif c == "Install project…" then
+      nx_pick_project("Install nx project deps:", function(p)
+        M.run_template("shared.install.scoped", { projects = { p } })
+      end)
+    elseif c == "Install by filter…" then
+      vim.ui.input({ prompt = "Install --filter: " }, function(f)
+        if f and f ~= "" then
+          M.run_template("shared.install.scoped", { filter = f })
+        end
+      end)
+    end
+  end)
+end
+
 -- ── run-a-test flow (All / Pick file / By name|ticket, with discovery) ───────
 
 local function specs_root()
@@ -1047,21 +1171,6 @@ local function run_tests_gated()
 end
 
 -- Toggle the Nx watcher daemon (keeps the live libs rebuilt on change).
-local function toggle_watch()
-  if not state.root then
-    return
-  end
-  local tasks = require("ledger.tasks")
-  if tasks.is_running("shared.nx.watch") then
-    tasks.stop("shared.nx.watch")
-    state.watching = false
-  else
-    tasks.run("shared.nx.watch", { root = state.root })
-    state.watching = true
-  end
-  redraw("all")
-end
-
 local function set_keymaps()
   local buf = state.buf
   local function map(lhs, fn)
@@ -1201,7 +1310,8 @@ local function set_keymaps()
     M.run_step_by_id("build")
   end)
   -- tests run from the navigable "Run tests" pipeline row (j to it, then <CR>)
-  map("w", toggle_watch)
+  map("w", watch_menu)
+  map("t", target_menu)
   map("F", fix_menu)
   map("R", function()
     refresh_statuses()
@@ -1335,6 +1445,7 @@ local function build()
     bottom = "logs",
     log_offset = 0,
     watching = false,
+    watch_mode = (require("ledger.config").get().builder or {}).watch_default or "on-save",
     side = "left",
     focus_idx = 1,
     buf = vim.api.nvim_create_buf(false, true),
@@ -1346,8 +1457,24 @@ local function build()
 
   install_callbacks()
   state.on_runtests = run_tests_gated -- the Run-tests button + r
-  state.on_watch = toggle_watch -- the header watch chip + w
+  state.on_watch = watch_menu -- the header watch chip + w
+  -- on-save incremental rebuild (fires only while watch_mode == "on-save")
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    group = vim.api.nvim_create_augroup("ledger_builder_watch", { clear = true }),
+    callback = function(args)
+      if vim.bo[args.buf].buftype ~= "" then
+        return
+      end
+      local f = vim.api.nvim_buf_get_name(args.buf)
+      if f ~= "" then
+        on_save_rebuild(f)
+      end
+    end,
+  })
   mount()
+  if state.watch_mode == "nx" then
+    set_watch_mode("nx") -- defaulted to the nx daemon → start it
+  end
 end
 
 function M.open()

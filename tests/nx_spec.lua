@@ -99,4 +99,35 @@ describe("ledger.builder.nx", function()
     assert.equals(2, #nx.concat_logs(root, { "a", "b" }, 2)) -- cap keeps the tail across files
     assert.same({}, nx.concat_logs(root, {}))
   end)
+
+  it("projects parses project-graph.json (name → root, longest root first)", function()
+    local graph = {
+      nodes = {
+        ["@ledgerhq/live-common"] = { data = { root = "libs/ledger-live-common" } },
+        ["ledger-live-desktop"] = { data = { root = "apps/ledger-live-desktop" } },
+        ["@ledgerhq/types-live"] = { data = { root = "libs/ledgerjs/packages/types-live" } },
+      },
+    }
+    vim.fn.writefile({ vim.json.encode(graph) }, root .. "/.nx/workspace-data/project-graph.json")
+    local list = nx.projects(root)
+    assert.equals(3, #list)
+    assert.equals("libs/ledgerjs/packages/types-live", list[1].root) -- longest first
+    assert.same({}, nx.projects(vim.fn.tempname())) -- no graph → empty
+  end)
+
+  it("project_for_file maps a path to its owning project (longest prefix)", function()
+    local graph = {
+      nodes = {
+        ["@ledgerhq/live-common"] = { data = { root = "libs/ledger-live-common" } },
+        ["root-proj"] = { data = { root = "." } },
+      },
+    }
+    vim.fn.writefile({ vim.json.encode(graph) }, root .. "/.nx/workspace-data/project-graph.json")
+    assert.equals(
+      "@ledgerhq/live-common",
+      nx.project_for_file(root, root .. "/libs/ledger-live-common/src/e2e/swap.ts")
+    )
+    assert.is_nil(nx.project_for_file(root, root .. "/README.md")) -- root-"." doesn't claim it
+    assert.is_nil(nx.project_for_file(root, "/elsewhere/foo.ts")) -- outside the repo
+  end)
 end)

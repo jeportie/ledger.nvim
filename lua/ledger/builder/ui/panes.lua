@@ -160,10 +160,10 @@ function M.header(st)
       end or nil,
     }
   end
-  -- Nx watcher chip (both platforms)
+  -- watch chip (both platforms): shows the mode (on-save / nx / off)
   meta[#meta + 1] = { "   watch: ", "LedgerBuilderDim" }
   meta[#meta + 1] = {
-    st.watching and "on" or "off",
+    st.watch_mode or "off",
     st.watching and "LedgerStateDone" or "LedgerBuilderDim",
     st.on_watch and function()
       st.on_watch()
@@ -752,7 +752,8 @@ function M.help_shortcuts()
     row("⏎", "run focused step / toggle process", "→ background pnpm task"),
     row("A", "run all (build)", "Run all · Clean + reinstall"),
     row("r", "run tests", "active when target is READY"),
-    row("w", "toggle Nx watcher", "auto-rebuild libs on change"),
+    row("w", "watch menu", "on-save · nx daemon · off"),
+    row("t", "target a project", "build / install one project"),
     row("B", "build", "→ desktop build:* / detox e2e:build"),
     row("x / s", "kill / start focused process"),
     row("e", "env dropdown", "desktop: build/MOCK · mobile: detox config"),

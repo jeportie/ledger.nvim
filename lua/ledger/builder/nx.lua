@@ -162,4 +162,67 @@ function M.concat_logs(root, hashes, max)
   return tail(lines, max or 2000)
 end
 
+-- Project graph (project-graph.json): name → root, for the project picker and
+-- file→project mapping. Cached per root, re-decoded only when the file's mtime
+-- changes; we keep just the {name, root} pairs (the graph file is multi-MB),
+-- sorted longest-root-first so prefix matching picks the most specific project.
+local _proj_cache = {}
+
+function M.projects(root)
+  if not root then
+    return {}
+  end
+  local path = root .. "/.nx/workspace-data/project-graph.json"
+  local st = (vim.uv or vim.loop).fs_stat(path)
+  if not st then
+    return {}
+  end
+  local cached = _proj_cache[root]
+  if cached and cached.mtime == st.mtime.sec then
+    return cached.list
+  end
+  local ok, raw = pcall(vim.fn.readfile, path)
+  if not ok or type(raw) ~= "table" then
+    return {}
+  end
+  local ok2, data = pcall(vim.json.decode, table.concat(raw, "\n"))
+  if not ok2 or type(data) ~= "table" or type(data.nodes) ~= "table" then
+    return {}
+  end
+  local list = {}
+  for name, node in pairs(data.nodes) do
+    local r = node and node.data and node.data.root
+    if type(r) == "string" and r ~= "" then
+      list[#list + 1] = { name = name, root = r }
+    end
+  end
+  table.sort(list, function(a, b)
+    if #a.root ~= #b.root then
+      return #a.root > #b.root
+    end
+    return a.name < b.name
+  end)
+  _proj_cache[root] = { mtime = st.mtime.sec, list = list }
+  return list
+end
+
+-- The nx project owning `abspath` (longest root prefix), or nil.
+function M.project_for_file(root, abspath)
+  if not root or not abspath then
+    return nil
+  end
+  local prefix = root:gsub("/+$", "") .. "/"
+  if abspath:sub(1, #prefix) ~= prefix then
+    return nil
+  end
+  local rel = abspath:sub(#prefix + 1)
+  for _, p in ipairs(M.projects(root)) do -- sorted longest-root-first
+    local pr = p.root:gsub("/+$", "")
+    if pr ~= "" and (rel == pr or rel:sub(1, #pr + 1) == pr .. "/") then
+      return p.name
+    end
+  end
+  return nil
+end
+
 return M

@@ -134,4 +134,12 @@ describe("ledger.builder integration", function()
     assert.is_true(running.running_steps(steps).install == true)
     pcall(vim.fn.jobstop, job)
   end)
+
+  it("maps a lib file to its nx project + lists projects (real graph)", function()
+    assert.is_true(#nx.projects(ROOT) > 0)
+    assert.equals(
+      "@ledgerhq/live-common",
+      nx.project_for_file(ROOT, ROOT .. "/libs/ledger-live-common/src/e2e/swap.ts")
+    )
+  end)
 end)

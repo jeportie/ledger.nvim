@@ -36,8 +36,11 @@ M.defaults = {
     test_icon = "󰂓",
     -- the clean step's bullet icon (nf-md-broom) — shown instead of a number.
     clean_icon = "󰃢",
-    -- watcher command (w key) — Nx watch keeps the live libs rebuilt on change.
+    -- watcher command for the "nx" watch mode (nx watch daemon).
     watch_cmd = "pnpm nx watch --all -- pnpm nx build $NX_PROJECT_NAME",
+    -- watch mode started on open: "on-save" (Neovim rebuilds the saved file's nx
+    -- project — daemon-free, reliable here), "nx" (nx watch daemon), or "off".
+    watch_default = "on-save",
     -- spinner.nvim patterns per role (see lua/ledger/builder/ui/spin.lua).
     -- Any name from require("spinner.pattern") works; falls back to dotsCircle.
     spinner = {

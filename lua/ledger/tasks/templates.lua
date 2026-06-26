@@ -280,7 +280,42 @@ M.templates = {
       local b = (require("ledger.config").get() or {}).builder or {}
       return b.watch_cmd or "pnpm nx watch --all -- pnpm nx build $NX_PROJECT_NAME"
     end,
+    -- nx watch needs the Nx daemon; this repo disables it globally
+    -- (useDaemonProcess:false), so force it on just for the watch process.
+    env = { NX_DAEMON = "true" },
     daemon = true,
+  },
+  {
+    id = "shared.nx.build",
+    label = "Nx · build (targeted)",
+    platform = "shared",
+    kind = "build",
+    cwd = "repo",
+    -- Targeted build: `opts.projects` (a list) or `opts.filter` (a raw -p glob).
+    cmd = function(opts)
+      local sel = (opts.filter and opts.filter ~= "" and opts.filter) or table.concat(opts.projects or {}, " ")
+      return "pnpm nx run-many -t build -p " .. sel
+    end,
+  },
+  {
+    id = "shared.install.scoped",
+    label = "Install · targeted deps",
+    platform = "shared",
+    kind = "install",
+    cwd = "repo",
+    -- Scoped install: deps for `opts.projects` (each via --filter="<p>...") or a
+    -- raw `opts.filter`. Non-interactive (no TTY) like the per-platform installs.
+    cmd = function(opts)
+      local base = "pnpm i --config.confirm-modules-purge=false"
+      if opts.filter and opts.filter ~= "" then
+        return base .. ' --filter="' .. opts.filter .. '"'
+      end
+      local parts = { base }
+      for _, p in ipairs(opts.projects or {}) do
+        parts[#parts + 1] = '--filter="' .. p .. '..."'
+      end
+      return table.concat(parts, " ")
+    end,
   },
   {
     id = "shared.adb.reverse",
