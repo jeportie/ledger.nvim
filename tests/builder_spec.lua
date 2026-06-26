@@ -453,6 +453,46 @@ describe("ledger.builder.ui.panes", function()
     assert.same({}, lines[rt - 1]) -- the row immediately above Run-tests is blank
   end)
 
+  it("pipeline_items interleaves sub-steps and ends with run-tests", function()
+    local st = vim.tbl_extend("force", {}, fake, {
+      steps = {
+        { id = "libs", label = "build:lld:deps", template = "desktop.build.deps" },
+        { id = "build", label = "build:testing", template = "desktop.build.testing" },
+      },
+      show_substeps = true,
+      substeps = { libs = { { project = "@ledgerhq/live-common", task_id = "ss:libs:c", status = "in_progress" } } },
+    })
+    local items = panes.pipeline_items(st)
+    assert.equals("step", items[1].kind)
+    assert.equals("substep", items[2].kind)
+    assert.equals("@ledgerhq/live-common", items[2].sub.project)
+    assert.equals("step", items[3].kind)
+    assert.equals("runtests", items[4].kind)
+    -- folded away when show_substeps is false
+    st.show_substeps = false
+    assert.equals(3, #panes.pipeline_items(st)) -- libs, build, runtests
+  end)
+
+  it("renders a sub-step row indented with state + duration", function()
+    local st = vim.tbl_extend("force", {}, fake, {
+      steps = { { id = "libs", label = "build:lld:deps", template = "desktop.build.deps" } },
+      statuses = { libs = "done" },
+      show_substeps = true,
+      substeps = { libs = { { project = "@ledgerhq/live-common", task_id = "x", status = "done", dur = 12 } } },
+      focus = { col = "pipeline", idx = 1 },
+    })
+    local s = flat(panes.pipeline_content(st, 70))
+    assert.is_truthy(s:find("└ @ledgerhq/live-common", 1, true))
+    assert.is_truthy(s:find("12s", 1, true))
+  end)
+
+  it("logs_content prefers a pinned st.log_id (ad-hoc/watch log)", function()
+    require("ledger.tasks").inject("ss:libs:probe", { "sub-step log line" }, 0)
+    local st = vim.tbl_extend("force", {}, fake, { log_id = "ss:libs:probe", bottom = "logs" })
+    local s = flat(panes.logs_content(st, 10, 60))
+    assert.is_truthy(s:find("sub-step log line", 1, true))
+  end)
+
   it("pipeline cells are left-aligned with uniform widths across targets", function()
     local ui = require("volt.ui")
     local function rowwidths(p, f)

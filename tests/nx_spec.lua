@@ -130,4 +130,22 @@ describe("ledger.builder.nx", function()
     assert.is_nil(nx.project_for_file(root, root .. "/README.md")) -- root-"." doesn't claim it
     assert.is_nil(nx.project_for_file(root, "/elsewhere/foo.ts")) -- outside the repo
   end)
+
+  it("buildable_project_for_file gates on a build target", function()
+    local graph = {
+      nodes = {
+        ["@ledgerhq/live-common"] = { data = { root = "libs/ledger-live-common", targets = { build = {} } } },
+        ["e2e-tests"] = { data = { root = "tests/e2e", targets = { lint = {} } } }, -- no build
+      },
+    }
+    vim.fn.writefile({ vim.json.encode(graph) }, root .. "/.nx/workspace-data/project-graph.json")
+    assert.equals(
+      "@ledgerhq/live-common",
+      nx.buildable_project_for_file(root, root .. "/libs/ledger-live-common/src/x.ts")
+    )
+    -- a non-buildable project's file → nil (no junk sub-step on save)
+    assert.is_nil(nx.buildable_project_for_file(root, root .. "/tests/e2e/foo.ts"))
+    -- project_for_file still returns it regardless of targets
+    assert.equals("e2e-tests", nx.project_for_file(root, root .. "/tests/e2e/foo.ts"))
+  end)
 end)

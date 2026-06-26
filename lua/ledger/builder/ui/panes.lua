@@ -244,6 +244,23 @@ function M.pw_installed()
   return false
 end
 
+-- The ordered, focusable rows of the pipeline column: each step, its sub-steps
+-- (when shown), then the Run-tests row. Single source for nav + rendering so the
+-- focus index lines up across both.
+function M.pipeline_items(st)
+  local items = {}
+  for _, step in ipairs(st.steps or {}) do
+    items[#items + 1] = { kind = "step", step = step }
+    if st.show_substeps then
+      for _, sub in ipairs((st.substeps or {})[step.id] or {}) do
+        items[#items + 1] = { kind = "substep", parent = step.id, sub = sub }
+      end
+    end
+  end
+  items[#items + 1] = { kind = "runtests" }
+  return items
+end
+
 function M.pipeline_content(st, inner_w)
   local hl = require("ledger.builder.ui.hl")
   local ui = require("volt.ui")
@@ -310,38 +327,8 @@ function M.pipeline_content(st, inner_w)
   end
 
   local clean_icon = (cfg.clean_icon and cfg.clean_icon ~= "") and cfg.clean_icon or "󰃢"
-  local tbl = { header(), rule() }
-  local num = 0
-  for i, step in ipairs(steps) do
-    local state = (st.statuses or {})[step.id] or "missing"
-    local g, ghl = glyph(state, st.tick or 0, state == "in_progress" and hl.pulse or nil)
-    local focused = st.focus and st.focus.col == "pipeline" and st.focus.idx == i
-    local bullet, bhl
-    if focused then
-      bullet, bhl = "▶", "LedgerBuilderKey"
-    elseif state == "in_progress" then
-      bullet, bhl = spin.frame(step_spinner, st.tick or 0), "LedgerYellow0"
-    else
-      bullet, bhl = "✶", "LedgerYellow0"
-    end
-    -- clean leads with the broom icon (like the Run-tests row's icon); the real
-    -- build steps are numbered 1..N.
-    local lead
-    if step.id == "clean" then
-      lead = clean_icon
-    else
-      num = num + 1
-      lead = tostring(num)
-    end
-    local d = durs[step.template]
-    tbl[#tbl + 1] =
-      row(bullet, bhl, lead .. " " .. step.label, g, ghl, STATE_WORD[state] or state, d and fmt_dur(d.duration) or "-")
-  end
-
-  -- the navigable Run-tests row (pipeline row #steps+1): test devicon instead of
-  -- a number, star bullet, Enter/click runs the gated test action.
-  local rt_focused = st.focus and st.focus.col == "pipeline" and st.focus.idx == #steps + 1
   local rt_icon = (cfg.test_icon and cfg.test_icon ~= "") and cfg.test_icon or "󰙨"
+  -- Run-tests readiness (rendered as the last pipeline item).
   local rt_g, rt_word, rt_hl = "●", "ready", "LedgerStateDone"
   if tstate ~= "ready" then
     rt_g, rt_word, rt_hl = "○", "locked", "LedgerStatePending"
@@ -349,19 +336,73 @@ function M.pipeline_content(st, inner_w)
     rt_g, rt_word, rt_hl = "⚠", "setup pw", "LedgerStateStale"
   end
   local rt_dur = durs[st.platform == "desktop" and "desktop.pw.run" or "mobile.detox.test"]
-  tbl[#tbl + 1] = {} -- a blank line separating the build steps from the Run-tests action
-  tbl[#tbl + 1] = row(
-    rt_focused and "▶" or "✶",
-    rt_focused and "LedgerBuilderKey" or "LedgerYellow0",
-    rt_icon .. " Run tests",
-    rt_g,
-    rt_hl,
-    rt_word,
-    rt_dur and fmt_dur(rt_dur.duration) or "-",
-    st.on_runtests and function()
-      st.on_runtests()
-    end or nil
-  )
+
+  -- One pass over the flat pipeline items so the focus index matches navigation
+  -- (steps, their sub-steps when shown, then the Run-tests row).
+  local tbl = { header(), rule() }
+  local num = 0
+  for idx, it in ipairs(M.pipeline_items(st)) do
+    local focused = st.focus and st.focus.col == "pipeline" and st.focus.idx == idx
+    if it.kind == "step" then
+      local step = it.step
+      local state = (st.statuses or {})[step.id] or "missing"
+      local g, ghl = glyph(state, st.tick or 0, state == "in_progress" and hl.pulse or nil)
+      local bullet, bhl
+      if focused then
+        bullet, bhl = "▶", "LedgerBuilderKey"
+      elseif state == "in_progress" then
+        bullet, bhl = spin.frame(step_spinner, st.tick or 0), "LedgerYellow0"
+      else
+        bullet, bhl = "✶", "LedgerYellow0"
+      end
+      -- clean leads with the broom icon; the real build steps are numbered 1..N.
+      local lead
+      if step.id == "clean" then
+        lead = clean_icon
+      else
+        num = num + 1
+        lead = tostring(num)
+      end
+      local d = durs[step.template]
+      tbl[#tbl + 1] = row(
+        bullet,
+        bhl,
+        lead .. " " .. step.label,
+        g,
+        ghl,
+        STATE_WORD[state] or state,
+        d and fmt_dur(d.duration) or "-"
+      )
+    elseif it.kind == "substep" then
+      -- per-project rebuild/install, indented under its parent step
+      local sub = it.sub
+      local state = sub.status or "pending"
+      local g, ghl = glyph(state, st.tick or 0, state == "in_progress" and hl.pulse or nil)
+      tbl[#tbl + 1] = row(
+        focused and "▶" or " ",
+        focused and "LedgerBuilderKey" or "LedgerBuilderDim",
+        "└ " .. sub.project,
+        g,
+        ghl,
+        STATE_WORD[state] or state,
+        sub.dur and fmt_dur(sub.dur) or "-"
+      )
+    else -- runtests
+      tbl[#tbl + 1] = {} -- a blank line separating the build steps from Run-tests
+      tbl[#tbl + 1] = row(
+        focused and "▶" or "✶",
+        focused and "LedgerBuilderKey" or "LedgerYellow0",
+        rt_icon .. " Run tests",
+        rt_g,
+        rt_hl,
+        rt_word,
+        rt_dur and fmt_dur(rt_dur.duration) or "-",
+        st.on_runtests and function()
+          st.on_runtests()
+        end or nil
+      )
+    end
+  end
 
   -- global target state line (desktop · READY / IN PROGRESS / NOT READY)
   local target = st.platform == "desktop" and "desktop" or st.platform_flag
@@ -548,10 +589,12 @@ end
 function M.logs_content(st, height, width)
   local tasks = require("ledger.tasks")
   width = width or 50
-  local id
-  if st.focus and st.focus.col == "pipeline" then
-    local step = (st.steps or {})[st.focus.idx]
-    id = step and step.template or nil
+  local id = st.log_id -- a pinned ad-hoc/watch log wins
+  if not id and st.focus and st.focus.col == "pipeline" then
+    local it = M.pipeline_items(st)[st.focus.idx]
+    if it then
+      id = (it.step and it.step.template) or (it.sub and it.sub.task_id) or nil
+    end
   end
   id = id or tasks.last_started
   -- scroll window: offset 0 = newest tail; st.log_offset scrolls older
@@ -754,6 +797,7 @@ function M.help_shortcuts()
     row("r", "run tests", "active when target is READY"),
     row("w", "watch menu", "on-save · nx daemon · off"),
     row("t", "target a project", "build / install one project"),
+    row("z", "fold sub-steps", "show / hide per-project rebuilds"),
     row("B", "build", "→ desktop build:* / detox e2e:build"),
     row("x / s", "kill / start focused process"),
     row("e", "env dropdown", "desktop: build/MOCK · mobile: detox config"),

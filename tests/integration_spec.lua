@@ -141,5 +141,10 @@ describe("ledger.builder integration", function()
       "@ledgerhq/live-common",
       nx.project_for_file(ROOT, ROOT .. "/libs/ledger-live-common/src/e2e/swap.ts")
     )
+    -- live-common has a build target → on-save would rebuild it
+    assert.equals(
+      "@ledgerhq/live-common",
+      nx.buildable_project_for_file(ROOT, ROOT .. "/libs/ledger-live-common/src/e2e/swap.ts")
+    )
   end)
 end)

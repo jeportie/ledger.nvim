@@ -193,7 +193,8 @@ function M.projects(root)
   for name, node in pairs(data.nodes) do
     local r = node and node.data and node.data.root
     if type(r) == "string" and r ~= "" then
-      list[#list + 1] = { name = name, root = r }
+      local targets = node.data.targets
+      list[#list + 1] = { name = name, root = r, has_build = type(targets) == "table" and targets.build ~= nil }
     end
   end
   table.sort(list, function(a, b)
@@ -206,8 +207,8 @@ function M.projects(root)
   return list
 end
 
--- The nx project owning `abspath` (longest root prefix), or nil.
-function M.project_for_file(root, abspath)
+-- The nx project record owning `abspath` (longest root prefix), or nil.
+local function record_for_file(root, abspath)
   if not root or not abspath then
     return nil
   end
@@ -219,10 +220,23 @@ function M.project_for_file(root, abspath)
   for _, p in ipairs(M.projects(root)) do -- sorted longest-root-first
     local pr = p.root:gsub("/+$", "")
     if pr ~= "" and (rel == pr or rel:sub(1, #pr + 1) == pr .. "/") then
-      return p.name
+      return p
     end
   end
   return nil
+end
+
+-- The nx project owning `abspath`, or nil.
+function M.project_for_file(root, abspath)
+  local p = record_for_file(root, abspath)
+  return p and p.name or nil
+end
+
+-- Same, but only when the owning project has a `build` target (so saving a
+-- non-buildable file doesn't spawn a no-op rebuild).
+function M.buildable_project_for_file(root, abspath)
+  local p = record_for_file(root, abspath)
+  return (p and p.has_build) and p.name or nil
 end
 
 return M

@@ -60,6 +60,10 @@ function M.run(id, opts)
     vim.notify("ledger.tasks: " .. tostring(err), vim.log.levels.ERROR)
     return false, err
   end
+  -- `opts.task_id` lets several runs of one template (e.g. per-project sub-step
+  -- builds of `shared.nx.build`) live as distinct tasks with their own log/state.
+  local key = opts.task_id or id
+  local label = opts.label or fmt_label(spec)
 
   local rec = { lines = {}, running = true, started = os.time() }
   local function append(data)
@@ -94,7 +98,7 @@ function M.run(id, opts)
         end
         pcall(function()
           require("ledger.builder.history").record({
-            label = spec.label,
+            label = label,
             kind = spec.kind,
             code = code,
             duration = rec.duration,
@@ -105,15 +109,12 @@ function M.run(id, opts)
       -- persist per-repo per-template result (status + duration across sessions)
       if opts.root then
         pcall(function()
-          require("ledger.builder.store").record(opts.root, id, code, rec.duration)
+          require("ledger.builder.store").record(opts.root, key, code, rec.duration)
         end)
       end
       vim.schedule(function()
         local lvl = code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR
-        vim.notify(
-          (code == 0 and "✓ " or "✗ ") .. fmt_label(spec) .. (code == 0 and "" or (" (exit " .. code .. ")")),
-          lvl
-        )
+        vim.notify((code == 0 and "✓ " or "✗ ") .. label .. (code == 0 and "" or (" (exit " .. code .. ")")), lvl)
       end)
       if opts.on_done then
         vim.schedule(function()
@@ -124,13 +125,13 @@ function M.run(id, opts)
   })
 
   if not rec.job or rec.job <= 0 then
-    vim.notify("ledger.tasks: failed to start " .. fmt_label(spec), vim.log.levels.ERROR)
+    vim.notify("ledger.tasks: failed to start " .. label, vim.log.levels.ERROR)
     return false
   end
 
-  M.tasks[id] = rec
-  M.last_started = id
-  vim.notify("▶ " .. fmt_label(spec), vim.log.levels.INFO)
+  M.tasks[key] = rec
+  M.last_started = key
+  vim.notify("▶ " .. label, vim.log.levels.INFO)
   return true
 end
 

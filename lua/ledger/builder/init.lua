@@ -51,7 +51,8 @@ end
 
 local function view_len(view)
   if view == "pipeline" then
-    return #(state.steps or {}) + 1 -- + the navigable Run-tests row
+    -- steps + their sub-steps (when shown) + the Run-tests row
+    return #require("ledger.builder.ui.panes").pipeline_items(state)
   elseif view == "processes" then
     return #(state.procs or {})
   end
@@ -192,6 +193,20 @@ local function refresh_statuses()
     end
   end
   state.nx_seeded = true
+  -- per-project sub-step status + duration (from their in-memory tasks)
+  for _, list in pairs(state.substeps or {}) do
+    for _, sub in ipairs(list) do
+      if tasks.is_running(sub.task_id) then
+        sub.status = "in_progress"
+      else
+        local r = tasks.last_result(sub.task_id)
+        if r then
+          sub.status = (r.code == 0) and "done" or "failed"
+          sub.dur = r.duration
+        end -- else keep the launch-set status until a result lands
+      end
+    end
+  end
   sync_focus()
 end
 
@@ -380,7 +395,13 @@ local function compute_dims()
     #pl.steps("mobile", { platform_flag = "android" })
   )
   -- blank+target+blank+bar+blank (5) + table(header+rule+steps+blank+run-tests = 4+steps)
-  state.top_h = 9 + max_steps
+  local n_sub = 0
+  if state.show_substeps and state.substeps then
+    for _, list in pairs(state.substeps) do
+      n_sub = n_sub + #list
+    end
+  end
+  state.top_h = 9 + max_steps + n_sub
   -- chrome ≈ header(6) + top borders(2) + separator(1) + bottom borders(2) + footer(1) + margin
   state.bottom_h = math.max(8, math.min(16, vim.o.lines - state.top_h - 13))
   -- shared row width so the logs/stats row aligns exactly with the top row:
@@ -441,22 +462,81 @@ function M.run_step_by_id(id)
   vim.notify("Builder: no '" .. id .. "' step for this platform", vim.log.levels.WARN)
 end
 
+-- Record + launch a per-project sub-step under `parent` ("libs" for builds,
+-- "install" for scoped installs). `spec` = { template, label, projects?, filter? }.
+-- The sub-step shows as a navigable row under its parent (state + duration) and
+-- its log is pinned so it's visible.
+local function add_substep(parent, spec)
+  if not state.root or not spec.label or spec.label == "" then
+    return
+  end
+  state.substeps = state.substeps or {}
+  local list = state.substeps[parent] or {}
+  state.substeps[parent] = list
+  local rec, is_new
+  for _, s in ipairs(list) do
+    if s.project == spec.label then
+      rec = s
+      break
+    end
+  end
+  if not rec then
+    rec = { project = spec.label, task_id = "ss:" .. parent .. ":" .. spec.label, template = spec.template }
+    list[#list + 1] = rec
+    is_new = true
+  end
+  rec.run = { projects = spec.projects, filter = spec.filter }
+  rec.status = "in_progress"
+  state.log_id = rec.task_id -- pin the log so the rebuild's output is visible
+  state.bottom = "logs"
+  state.log_offset = 0
+  require("ledger.tasks").run(spec.template, {
+    root = state.root,
+    task_id = rec.task_id,
+    label = spec.label,
+    projects = spec.projects,
+    filter = spec.filter,
+    on_done = function()
+      if state then
+        refresh_statuses()
+        redraw("all")
+      end
+    end,
+  })
+  refresh_statuses()
+  if is_new and state.show_substeps then
+    rebuild() -- a new visible row → re-layout to fit it
+  else
+    redraw("all")
+  end
+end
+
 local function activate()
   if not state.root then
     return
   end
   local v = focused_view()
   if v == "pipeline" then
-    local steps = state.steps or {}
-    if state.focus_idx == #steps + 1 then -- the Run-tests row
+    local it = require("ledger.builder.ui.panes").pipeline_items(state)[state.focus_idx]
+    if not it then
+      return
+    end
+    if it.kind == "runtests" then
       if state.on_runtests then
         state.on_runtests()
       end
-      return
-    end
-    local step = steps[state.focus_idx]
-    if step and step.template then
-      M.run_template(step.template)
+    elseif it.kind == "step" then
+      if it.step.template then
+        M.run_template(it.step.template)
+      end
+    elseif it.kind == "substep" then -- Enter re-runs the sub-step
+      local run = it.sub.run or {}
+      add_substep(it.parent, {
+        template = it.sub.template,
+        label = it.sub.project,
+        projects = run.projects,
+        filter = run.filter,
+      })
     end
   elseif v == "processes" then
     local p = (state.procs or {})[state.focus_idx]
@@ -753,7 +833,7 @@ local function on_save_rebuild(abspath)
   if not (state and state.root and state.watch_mode == "on-save") then
     return
   end
-  local proj = require("ledger.builder.nx").project_for_file(state.root, abspath)
+  local proj = require("ledger.builder.nx").buildable_project_for_file(state.root, abspath)
   if not proj then
     return
   end
@@ -763,13 +843,7 @@ local function on_save_rebuild(abspath)
     if _watch_ticks[proj] ~= tick or not (state and state.root and state.watch_mode == "on-save") then
       return
     end
-    require("ledger.tasks").run("shared.nx.build", { root = state.root, projects = { proj } })
-    vim.defer_fn(function()
-      if state and state.win and vim.api.nvim_win_is_valid(state.win) then
-        refresh_statuses()
-        redraw("all")
-      end
-    end, 300)
+    add_substep("libs", { template = "shared.nx.build", label = proj, projects = { proj } })
   end, 400)
 end
 
@@ -813,25 +887,25 @@ local function target_menu()
         vim.notify("Builder: the previous buffer isn't inside an nx project", vim.log.levels.WARN)
         return
       end
-      M.run_template("shared.nx.build", { projects = { proj } })
+      add_substep("libs", { template = "shared.nx.build", label = proj, projects = { proj } })
     elseif c == "Build project…" then
       nx_pick_project("Build nx project:", function(p)
-        M.run_template("shared.nx.build", { projects = { p } })
+        add_substep("libs", { template = "shared.nx.build", label = p, projects = { p } })
       end)
     elseif c == "Build by filter…" then
       vim.ui.input({ prompt = "Build -p filter: " }, function(f)
         if f and f ~= "" then
-          M.run_template("shared.nx.build", { filter = f })
+          add_substep("libs", { template = "shared.nx.build", label = f, filter = f })
         end
       end)
     elseif c == "Install project…" then
       nx_pick_project("Install nx project deps:", function(p)
-        M.run_template("shared.install.scoped", { projects = { p } })
+        add_substep("install", { template = "shared.install.scoped", label = p, projects = { p } })
       end)
     elseif c == "Install by filter…" then
       vim.ui.input({ prompt = "Install --filter: " }, function(f)
         if f and f ~= "" then
-          M.run_template("shared.install.scoped", { filter = f })
+          add_substep("install", { template = "shared.install.scoped", label = f, filter = f })
         end
       end)
     end
@@ -1177,17 +1251,27 @@ local function set_keymaps()
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true })
   end
   -- scroll the Logs content only (offset 0 = newest); no-op unless Logs is shown
+  -- The log id currently shown: a pinned ad-hoc/watch log (state.log_id), else
+  -- the focused pipeline item's task (step or sub-step), else the last started.
+  local function current_log_id()
+    if state.log_id then
+      return state.log_id
+    end
+    local tasks = require("ledger.tasks")
+    if state.focus and state.focus.col == "pipeline" then
+      local it = require("ledger.builder.ui.panes").pipeline_items(state)[state.focus_idx]
+      if it then
+        return (it.step and it.step.template) or (it.sub and it.sub.task_id) or tasks.last_started
+      end
+    end
+    return tasks.last_started
+  end
   local function scroll(delta)
     if state.bottom ~= "logs" then
       return
     end
     local tasks = require("ledger.tasks")
-    local id
-    if state.focus and state.focus.col == "pipeline" then
-      local step = (state.steps or {})[state.focus_idx]
-      id = step and step.template or nil
-    end
-    id = id or tasks.last_started
+    local id = current_log_id()
     local len = id and tasks.log_len(id) or 0
     local maxoff = math.max(0, len - state.bottom_h)
     state.log_offset = math.max(0, math.min((state.log_offset or 0) + delta, maxoff))
@@ -1201,12 +1285,7 @@ local function set_keymaps()
       return
     end
     local tasks = require("ledger.tasks")
-    local id
-    if state.focus and state.focus.col == "pipeline" then
-      local step = (state.steps or {})[state.focus_idx]
-      id = step and step.template or nil
-    end
-    id = id or tasks.last_started
+    local id = current_log_id()
     local len = id and tasks.log_len(id) or 0
     if len == 0 then
       vim.notify("Builder: no logs to copy", vim.log.levels.WARN)
@@ -1241,8 +1320,9 @@ local function set_keymaps()
     return seen + col
   end
   local function nav(dir)
+    state.log_id = nil -- taking control of navigation unpins the auto-shown log
     if focused_view() == "pipeline" then
-      local n = #(state.steps or {}) + 1
+      local n = #require("ledger.builder.ui.panes").pipeline_items(state)
       if dir == "up" then
         state.focus_idx = math.max(1, (state.focus_idx or 1) - 1)
       elseif dir == "down" then
@@ -1312,6 +1392,10 @@ local function set_keymaps()
   -- tests run from the navigable "Run tests" pipeline row (j to it, then <CR>)
   map("w", watch_menu)
   map("t", target_menu)
+  map("z", function() -- fold / unfold the per-project sub-steps
+    state.show_substeps = not state.show_substeps
+    rebuild()
+  end)
   map("F", fix_menu)
   map("R", function()
     refresh_statuses()
@@ -1446,6 +1530,9 @@ local function build()
     log_offset = 0,
     watching = false,
     watch_mode = (require("ledger.config").get().builder or {}).watch_default or "on-save",
+    substeps = {}, -- per-project rebuild/install rows, keyed by parent step id
+    show_substeps = (require("ledger.config").get().builder or {}).substeps_default ~= false,
+    log_id = nil, -- pinned log (ad-hoc/watch task); cleared on navigation
     side = "left",
     focus_idx = 1,
     buf = vim.api.nvim_create_buf(false, true),

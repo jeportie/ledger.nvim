@@ -41,6 +41,8 @@ M.defaults = {
     -- watch mode started on open: "on-save" (Neovim rebuilds the saved file's nx
     -- project — daemon-free, reliable here), "nx" (nx watch daemon), or "off".
     watch_default = "on-save",
+    -- show per-project rebuild/install sub-steps under their parent step (z folds).
+    substeps_default = true,
     -- spinner.nvim patterns per role (see lua/ledger/builder/ui/spin.lua).
     -- Any name from require("spinner.pattern") works; falls back to dotsCircle.
     spinner = {
