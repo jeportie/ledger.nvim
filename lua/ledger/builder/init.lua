@@ -1084,6 +1084,30 @@ local function set_keymaps()
     state.log_offset = math.max(0, math.min((state.log_offset or 0) + delta, maxoff))
     redraw("body")
   end
+  -- Copy the currently-shown log to the clipboard (the panel is extmark
+  -- virt_text, so it can't be visually selected). Same id rule as scroll().
+  local function copy_logs()
+    if state.bottom ~= "logs" then
+      vim.notify("Builder: switch to the Logs view first (<)", vim.log.levels.WARN)
+      return
+    end
+    local tasks = require("ledger.tasks")
+    local id
+    if state.focus and state.focus.col == "pipeline" then
+      local step = (state.steps or {})[state.focus_idx]
+      id = step and step.template or nil
+    end
+    id = id or tasks.last_started
+    local len = id and tasks.log_len(id) or 0
+    if len == 0 then
+      vim.notify("Builder: no logs to copy", vim.log.levels.WARN)
+      return
+    end
+    local text = table.concat(tasks.log_tail(id, len), "\n")
+    vim.fn.setreg("+", text)
+    vim.fn.setreg('"', text)
+    vim.notify("Builder: copied " .. len .. " log lines to the clipboard (+)", vim.log.levels.INFO)
+  end
   -- 2-D navigation: Pipeline is the left column (steps + the Run-tests row),
   -- Processes is a right-hand card grid. Map flat focus_idx ↔ (row,col) via the
   -- same tiling panes uses, so left/right move between card columns too.
@@ -1221,6 +1245,7 @@ local function set_keymaps()
   map("<C-d>", function()
     scroll(-5)
   end)
+  map("y", copy_logs)
   map("?", toggle_help)
   map("q", M.hide)
   map("<Esc>", M.hide)

@@ -764,6 +764,7 @@ function M.help_shortcuts()
     {},
     { { "  View", "LedgerBuilderTitle" } },
     row("wheel / C-u C-d", "scroll the Logs pane"),
+    row("y", "copy logs → clipboard", "the focused step's / last-run log"),
     row("?", "toggle this help"),
     row("q / Esc", "hide (state preserved)"),
   }

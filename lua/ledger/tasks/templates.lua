@@ -85,7 +85,11 @@ M.templates = {
     platform = "desktop",
     kind = "install",
     cwd = "repo",
-    cmd = 'pnpm i --filter="ledger-live-desktop..." --filter="live-cli..." '
+    -- `--config.confirm-modules-purge=false`: the Builder runs without a TTY, so
+    -- pnpm can't prompt before removing node_modules (e.g. after a lockfile
+    -- change) — pre-answer it to avoid ERR_PNPM_ABORTED_REMOVE_MODULE_DIR_NO_TTY.
+    cmd = "pnpm i --config.confirm-modules-purge=false "
+      .. '--filter="ledger-live-desktop..." --filter="live-cli..." '
       .. '--filter="ledger-live" --filter="@ledgerhq/dummy-*-app..." '
       .. '--filter="ledger-live-desktop-e2e-tests" --unsafe-perm',
   },
@@ -175,7 +179,8 @@ M.templates = {
     platform = "mobile",
     kind = "install",
     cwd = "repo",
-    cmd = 'pnpm i --filter="live-mobile..." --filter="ledger-live" '
+    cmd = "pnpm i --config.confirm-modules-purge=false "
+      .. '--filter="live-mobile..." --filter="ledger-live" '
       .. '--filter="live-cli..." --filter="ledger-live-mobile-e2e-tests"',
   },
   {

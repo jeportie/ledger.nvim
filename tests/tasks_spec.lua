@@ -33,6 +33,17 @@ describe("ledger.tasks.templates", function()
     assert.is_false(templates.resolve("mobile.pod", {}, ROOT).daemon)
   end)
 
+  it("installs run non-interactively (no TTY → confirm-modules-purge=false)", function()
+    for _, id in ipairs({ "desktop.install", "mobile.install" }) do
+      local cmd = templates.resolve(id, {}, ROOT).cmd
+      assert.is_truthy(cmd:find("^pnpm i"), id .. " should still start with `pnpm i`")
+      assert.is_truthy(
+        cmd:find("--config.confirm-modules-purge=false", 1, true),
+        id .. " should pass --config.confirm-modules-purge=false"
+      )
+    end
+  end)
+
   describe("parametric commands", function()
     it("detox build prefixes pod for iOS only", function()
       assert.equals(
