@@ -13,6 +13,12 @@ M.tasks = {}
 
 local RING_MAX = 1000
 
+-- Strip ANSI CSI sequences (colour + cursor) and stray carriage returns from a
+-- captured log line so the dashboard renders plain text.
+function M.strip_ansi(line)
+  return (line:gsub("\27%[[%d;]*%a", ""):gsub("\r", ""))
+end
+
 -- Resolve the monorepo root: configured `monorepo_root` wins, else detect from
 -- cwd. Returns nil if neither points at a ledger-live checkout.
 function M.resolve_root()
@@ -54,10 +60,15 @@ function M.run(id, opts)
     vim.notify("ledger.tasks: " .. tostring(err), vim.log.levels.ERROR)
     return false, err
   end
+  -- `opts.task_id` lets several runs of one template (e.g. per-project sub-step
+  -- builds of `shared.nx.build`) live as distinct tasks with their own log/state.
+  local key = opts.task_id or id
+  local label = opts.label or fmt_label(spec)
 
   local rec = { lines = {}, running = true, started = os.time() }
   local function append(data)
     for _, line in ipairs(data) do
+      line = M.strip_ansi(line)
       if line ~= "" then
         rec.lines[#rec.lines + 1] = line
         if #rec.lines > RING_MAX then
@@ -87,7 +98,7 @@ function M.run(id, opts)
         end
         pcall(function()
           require("ledger.builder.history").record({
-            label = spec.label,
+            label = label,
             kind = spec.kind,
             code = code,
             duration = rec.duration,
@@ -95,24 +106,32 @@ function M.run(id, opts)
           })
         end)
       end
+      -- persist per-repo per-template result (status + duration across sessions)
+      if opts.root then
+        pcall(function()
+          require("ledger.builder.store").record(opts.root, key, code, rec.duration)
+        end)
+      end
       vim.schedule(function()
         local lvl = code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR
-        vim.notify(
-          (code == 0 and "✓ " or "✗ ") .. fmt_label(spec) .. (code == 0 and "" or (" (exit " .. code .. ")")),
-          lvl
-        )
+        vim.notify((code == 0 and "✓ " or "✗ ") .. label .. (code == 0 and "" or (" (exit " .. code .. ")")), lvl)
       end)
+      if opts.on_done then
+        vim.schedule(function()
+          opts.on_done(code)
+        end)
+      end
     end,
   })
 
   if not rec.job or rec.job <= 0 then
-    vim.notify("ledger.tasks: failed to start " .. fmt_label(spec), vim.log.levels.ERROR)
+    vim.notify("ledger.tasks: failed to start " .. label, vim.log.levels.ERROR)
     return false
   end
 
-  M.tasks[id] = rec
-  M.last_started = id
-  vim.notify("▶ " .. fmt_label(spec), vim.log.levels.INFO)
+  M.tasks[key] = rec
+  M.last_started = key
+  vim.notify("▶ " .. label, vim.log.levels.INFO)
   return true
 end
 
@@ -144,6 +163,44 @@ function M.log_tail(id, n)
     out[#out + 1] = r.lines[i]
   end
   return out
+end
+
+-- A window of up to `n` lines ending `offset` lines back from the newest
+-- (offset 0 = the tail). Used by the Logs pane for wheel scrolling.
+function M.log_window(id, offset, n)
+  local r = M.tasks[id]
+  if not r then
+    return {}
+  end
+  n = n or 12
+  offset = math.max(0, offset or 0)
+  local last = math.max(0, #r.lines - offset)
+  local start = math.max(1, last - n + 1)
+  local out = {}
+  for i = start, last do
+    out[#out + 1] = r.lines[i]
+  end
+  return out
+end
+
+-- Total captured line count (for clamping the scroll offset).
+function M.log_len(id)
+  local r = M.tasks[id]
+  return r and #r.lines or 0
+end
+
+-- Seed a task record with externally-sourced output (e.g. an Nx build run in
+-- another terminal), keyed by `id` (a step template), so the Logs panel can
+-- show it through the same log_* readers. Marks the task finished with `code`.
+function M.inject(id, lines, code)
+  M.tasks[id] = {
+    lines = lines or {},
+    running = false,
+    code = code,
+    started = os.time(),
+    duration = 0,
+    external = true,
+  }
 end
 
 -- { code, duration } for a finished task, or nil.

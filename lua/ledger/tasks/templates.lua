@@ -56,7 +56,8 @@ local function detox_test_cmd(opts)
 end
 
 -- Playwright test command. `opts.scope` ("all" | "file" | "name") + `opts.spec`
--- / `opts.name`; `opts.pwdebug` prefixes `PWDEBUG=1` to open the Inspector.
+-- / `opts.name`; `opts.pwdebug` prefixes `PWDEBUG=1` (Inspector); `opts.mock`
+-- prefixes `MOCK=1` (mocked device).
 local function pw_run_cmd(opts)
   local base = "pnpm e2e:desktop test:playwright"
   local scope = opts.scope or "all"
@@ -65,10 +66,14 @@ local function pw_run_cmd(opts)
   elseif scope == "name" and opts.name and opts.name ~= "" then
     base = base .. ' --grep "' .. opts.name .. '"'
   end
-  if opts.pwdebug then
-    base = "PWDEBUG=1 " .. base
+  local prefix = ""
+  if opts.mock then
+    prefix = "MOCK=1 " .. prefix
   end
-  return base
+  if opts.pwdebug then
+    prefix = prefix .. "PWDEBUG=1 "
+  end
+  return prefix .. base
 end
 
 -- The matrix. Order is roughly pipeline order per platform.
@@ -80,7 +85,11 @@ M.templates = {
     platform = "desktop",
     kind = "install",
     cwd = "repo",
-    cmd = 'pnpm i --filter="ledger-live-desktop..." --filter="live-cli..." '
+    -- `--config.confirm-modules-purge=false`: the Builder runs without a TTY, so
+    -- pnpm can't prompt before removing node_modules (e.g. after a lockfile
+    -- change) — pre-answer it to avoid ERR_PNPM_ABORTED_REMOVE_MODULE_DIR_NO_TTY.
+    cmd = "pnpm i --config.confirm-modules-purge=false "
+      .. '--filter="ledger-live-desktop..." --filter="live-cli..." '
       .. '--filter="ledger-live" --filter="@ledgerhq/dummy-*-app..." '
       .. '--filter="ledger-live-desktop-e2e-tests" --unsafe-perm',
   },
@@ -170,7 +179,8 @@ M.templates = {
     platform = "mobile",
     kind = "install",
     cwd = "repo",
-    cmd = 'pnpm i --filter="live-mobile..." --filter="ledger-live" '
+    cmd = "pnpm i --config.confirm-modules-purge=false "
+      .. '--filter="live-mobile..." --filter="ledger-live" '
       .. '--filter="live-cli..." --filter="ledger-live-mobile-e2e-tests"',
   },
   {
@@ -258,6 +268,39 @@ M.templates = {
     daemon = true,
   },
   {
+    id = "shared.nx.watch",
+    label = "Nx · watch (auto-rebuild libs)",
+    platform = "shared",
+    kind = "daemon",
+    cwd = "repo",
+    cmd = function(opts)
+      if opts.cmd and opts.cmd ~= "" then
+        return opts.cmd
+      end
+      local b = (require("ledger.config").get() or {}).builder or {}
+      return b.watch_cmd or "pnpm nx watch --all -- pnpm nx build $NX_PROJECT_NAME"
+    end,
+    -- nx watch needs the Nx daemon; this repo disables it globally
+    -- (useDaemonProcess:false), so force it on just for the watch process.
+    env = { NX_DAEMON = "true" },
+    daemon = true,
+  },
+  {
+    id = "shared.nx.build",
+    label = "Nx · build (targeted)",
+    platform = "shared",
+    kind = "build",
+    cwd = "repo",
+    -- Targeted build: `opts.projects` (a list) or `opts.filter` (a raw -p glob).
+    -- `--excludeTaskDependencies` builds ONLY the named project(s), not their
+    -- dependency graph — the libs/build:lld:deps step does the full graph build;
+    -- this is the fast, incremental single-project path for watch + targeting.
+    cmd = function(opts)
+      local sel = (opts.filter and opts.filter ~= "" and opts.filter) or table.concat(opts.projects or {}, " ")
+      return "pnpm nx run-many -t build -p " .. sel .. " --excludeTaskDependencies"
+    end,
+  },
+  {
     id = "shared.adb.reverse",
     label = "Android · adb reverse (8081 + 8099)",
     platform = "mobile",
@@ -299,6 +342,16 @@ for _, t in ipairs(M.templates) do
   M.by_id[t.id] = t
 end
 
+-- Force plain, streamed output from Nx/turbo so the Builder Logs read cleanly
+-- (jobstart is non-TTY; these belt-and-suspenders the static output style).
+-- NOTE: adjust to your Nx/turbo version if needed.
+local NX_PLAIN = {
+  NX_TUI = "false",
+  NX_TASKS_RUNNER_DYNAMIC_OUTPUT = "false",
+  TURBO_UI = "false",
+  FORCE_COLOR = "0",
+}
+
 -- Resolve a template id + opts into a concrete spec. `root` defaults to the
 -- live repo root; pass it explicitly for pure/testable resolution.
 function M.resolve(id, opts, root)
@@ -311,6 +364,11 @@ function M.resolve(id, opts, root)
     root = require("ledger.detox").get_repo_root()
   end
   local cmd = type(t.cmd) == "function" and t.cmd(opts) or t.cmd
+  local env = t.env and vim.deepcopy(t.env) or nil
+  if t.kind == "build" or t.kind == "install" then
+    -- build/install run via Nx/turbo → force readable streamed output in the Logs
+    env = vim.tbl_extend("force", {}, NX_PLAIN, env or {})
+  end
   return {
     id = t.id,
     label = t.label,
@@ -318,7 +376,7 @@ function M.resolve(id, opts, root)
     kind = t.kind,
     cmd = cmd,
     cwd = M.resolve_cwd(t.cwd, root),
-    env = t.env and vim.deepcopy(t.env) or nil,
+    env = env,
     daemon = t.daemon or false,
     artifact = t.artifact and (root .. "/" .. t.artifact) or nil,
   }

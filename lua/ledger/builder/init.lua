@@ -16,7 +16,6 @@ local M = {}
 
 local SPIN_MS = 120
 local PROC_REFRESH_EVERY = 16 -- ticks (~2s) between process liveness polls
-local RING = { "pipeline", "processes", "logs", "stats" }
 local TITLES = { pipeline = "PIPELINE", processes = "PROCESSES", logs = "LOGS", stats = "STATS" }
 local DEVICES = { "nanoS", "nanoSP", "nanoX", "stax", "flex" }
 local IOS_CONFIGS = { "ios.sim.debug", "ios.sim.release", "ios.sim.staging", "ios.sim.prerelease" }
@@ -36,21 +35,24 @@ local function default_config(flag)
   return flag == "android" and "android.emu.release" or "ios.sim.debug"
 end
 
--- ── ring / focus helpers ────────────────────────────────────────────────────
+-- ── focus helpers ───────────────────────────────────────────────────────────
+-- The top row is fixed: Pipeline (left) | Processes (right). h/l move focus
+-- between them; the bottom row (logs/stats) is informational.
 
 local function left_view()
-  return RING[state.pane_i]
+  return "pipeline"
 end
 local function right_view()
-  return RING[(state.pane_i % #RING) + 1]
+  return "processes"
 end
 local function focused_view()
-  return state.side == "right" and right_view() or left_view()
+  return state.side == "right" and "processes" or "pipeline"
 end
 
 local function view_len(view)
   if view == "pipeline" then
-    return #(state.steps or {})
+    -- steps + their sub-steps (when shown) + the Run-tests row
+    return #require("ledger.builder.ui.panes").pipeline_items(state)
   elseif view == "processes" then
     return #(state.procs or {})
   end
@@ -89,12 +91,34 @@ local function refresh_statuses()
   local proc = require("ledger.builder.proc")
   local tasks = require("ledger.tasks")
   local detox = require("ledger.detox")
+  local nx = require("ledger.builder.nx")
+  local persisted = require("ledger.builder.store").get(state.root) -- cross-session results
 
-  state.steps = pipeline.steps(state.platform, { platform_flag = state.platform_flag })
+  state.steps = pipeline.steps(state.platform, {
+    platform_flag = state.platform_flag,
+    config = state.config,
+    desktop_build = state.desktop_build,
+  })
   state.procs = proc.for_platform(state.platform, state.platform_flag)
+  state.watching = (state.watch_mode == "on-save") or (state.watch_mode == "nx" and tasks.is_running("shared.nx.watch"))
   local alive = {}
   for _, p in ipairs(state.procs) do
     alive[p.name] = p.alive
+  end
+  -- One Nx-cache read per distinct project per refresh, shared by the status
+  -- check (ctx.last_result) and the log auto-fetch below. `false` = queried, no
+  -- result (so we don't re-query); nil = not yet queried.
+  local nx_results = {}
+  local function nx_result_for(step)
+    if not step.nx_project then
+      return nil
+    end
+    local cached = nx_results[step.nx_project]
+    if cached == nil then
+      cached = nx.build_result(state.root, step.nx_project) or false
+      nx_results[step.nx_project] = cached
+    end
+    return cached or nil
   end
   local ctx = {
     root = state.root,
@@ -111,13 +135,76 @@ local function refresh_statuses()
     proc_alive = function(name)
       return alive[name] or false
     end,
+    last_result = function(step)
+      -- Nx is authoritative for nx_project steps (covers builder + external
+      -- runs); else the per-repo store (builder-launched, shared across sessions).
+      return nx_result_for(step) or persisted[step.template]
+    end,
   }
+  -- steps whose command is running in ANY terminal (cross-session in-progress)
+  local running = require("ledger.builder.running").running_steps(state.steps)
   state.statuses = {}
   for _, step in ipairs(state.steps) do
-    if step.template and tasks.is_running(step.template) then
-      state.statuses[step.id] = "running"
+    if (step.template and tasks.is_running(step.template)) or running[step.id] then
+      state.statuses[step.id] = "in_progress"
     else
       state.statuses[step.id] = pipeline.status(step, ctx)
+    end
+  end
+  -- clean: "recommended" when a build/install step failed (you must clean before
+  -- rebuilding); "idle" otherwise. "in_progress" (set above) always wins.
+  for _, step in ipairs(state.steps) do
+    if step.id == "clean" and state.statuses.clean ~= "in_progress" then
+      local any_failed = false
+      for _, s in ipairs(state.steps) do
+        if s.id ~= "clean" and state.statuses[s.id] == "failed" then
+          any_failed = true
+          break
+        end
+      end
+      state.statuses.clean = any_failed and "recommended" or "idle"
+    end
+  end
+  -- Auto-fetch builder/external Nx build logs into the Logs panel. Prefer the
+  -- FULL run-many log (all task outputs, via run.json); fall back to the leaf
+  -- task's log when the latest run was a different project (e.g. opening over an
+  -- older build). The first refresh only seeds (inject so focusing a step shows
+  -- its log) without stealing the panel; a change while open is a genuine
+  -- completion → pop the panel to it.
+  state.nx_seen = state.nx_seen or {}
+  local seeding = not state.nx_seeded
+  for _, step in ipairs(state.steps) do
+    if step.nx_project then
+      local res = nx_result_for(step) -- { code, hash } | nil  (status, from the db)
+      local meta = nx.run_meta(state.root, step.nx_project) -- full-run meta | nil
+      local key = (meta and "run:" .. meta.id) or (res and res.hash and "leaf:" .. res.hash)
+      if key and state.nx_seen[step.template] ~= key then
+        local lines = (meta and nx.concat_logs(state.root, meta.hashes, 2000))
+          or (res and res.hash and nx.log_lines(state.root, res.hash, 2000))
+        if lines and #lines > 0 then
+          tasks.inject(step.template, lines, res and res.code)
+          if not seeding then
+            tasks.last_started = step.template -- completion while open → pop the log
+            state.log_offset = 0
+          end
+        end
+        state.nx_seen[step.template] = key
+      end
+    end
+  end
+  state.nx_seeded = true
+  -- per-project sub-step status + duration (from their in-memory tasks)
+  for _, list in pairs(state.substeps or {}) do
+    for _, sub in ipairs(list) do
+      if tasks.is_running(sub.task_id) then
+        sub.status = "in_progress"
+      else
+        local r = tasks.last_result(sub.task_id)
+        if r then
+          sub.status = (r.code == 0) and "done" or "failed"
+          sub.dur = r.duration
+        end -- else keep the launch-set status until a result lands
+      end
     end
   end
   sync_focus()
@@ -130,12 +217,17 @@ local function refresh_runtime()
   local proc = require("ledger.builder.proc")
   local tasks = require("ledger.tasks")
   state.procs = proc.for_platform(state.platform, state.platform_flag)
+  local running = require("ledger.builder.running").running_steps(state.steps)
+  local finished = false
   for _, step in ipairs(state.steps or {}) do
-    if step.template and tasks.is_running(step.template) then
-      state.statuses[step.id] = "running"
-    elseif state.statuses[step.id] == "running" then
-      state.statuses[step.id] = "ready"
+    if (step.template and tasks.is_running(step.template)) or running[step.id] then
+      state.statuses[step.id] = "in_progress"
+    elseif state.statuses[step.id] == "in_progress" then
+      finished = true -- a running step (ours or external) just finished → re-evaluate
     end
+  end
+  if finished then
+    refresh_statuses()
   end
 end
 
@@ -153,11 +245,11 @@ local function render_view(view, inner_w, height)
   local panes = require("ledger.builder.ui.panes")
   local content
   if view == "pipeline" then
-    content = panes.pipeline_content(state)
+    content = panes.pipeline_content(state, inner_w, height)
   elseif view == "processes" then
-    content = panes.processes_content(state)
+    content = panes.processes_content(state, inner_w, height)
   elseif view == "logs" then
-    content = panes.logs_content(state, height)
+    content = panes.logs_content(state, height, inner_w)
   else
     content = panes.stats_content(state, inner_w)
   end
@@ -172,9 +264,44 @@ local function divider(n)
   return out
 end
 
-local function sections()
+-- Top row: Pipeline | divider | Processes (always visible, side by side).
+local function top_row()
+  local ui = require("volt.ui")
+  local left = render_view("pipeline", state.pane_inner, state.top_h)
+  local right = render_view("processes", state.pane_inner, state.top_h)
+  return ui.grid_col({
+    { lines = left, w = state.pane_inner + 4, pad = 1 },
+    { lines = divider(#left), w = 1, pad = 1 },
+    { lines = right, w = state.pane_inner + 4 },
+  })
+end
+
+-- Bottom row, exactly `row_w` wide so it aligns with the top row. Logs is one
+-- full-width box; Stats is 3 boxes with `│` dividers between them (mirroring the
+-- top row's divider). `(c1+5)+(2)+(c2+5)+(2)+(c3+4) = c1+c2+c3 + 18 = row_w`.
+local function bottom_row(row_w, h)
   local panes = require("ledger.builder.ui.panes")
   local ui = require("volt.ui")
+  if state.bottom == "stats" then
+    local base = math.max(12, math.floor((row_w - 18) / 3))
+    local c3 = math.max(12, row_w - 18 - 2 * base)
+    local function sbox(title, fn, col)
+      return panes.box(title, pad_to(fn(state, col), h), col)
+    end
+    local div = divider(h + 2) -- each stats box is h + 2 lines tall
+    return ui.grid_col({
+      { lines = sbox("HISTORY", panes.stats_history, base), w = base + 4, pad = 1 },
+      { lines = div, w = 1, pad = 1 },
+      { lines = sbox("BUILD", panes.stats_buildtime, base), w = base + 4, pad = 1 },
+      { lines = div, w = 1, pad = 1 },
+      { lines = sbox("PASS", panes.stats_passrate, c3), w = c3 + 4 },
+    })
+  end
+  return render_view("logs", row_w - 4, h)
+end
+
+local function sections()
+  local panes = require("ledger.builder.ui.panes")
   return {
     {
       name = "header",
@@ -185,42 +312,54 @@ local function sections()
     {
       name = "body",
       lines = function()
-        local pane_inner = state.pane_inner
-        local pane_h = state.pane_h
+        local body_h = state.top_h + state.bottom_h + 1
         if not state.root then
-          return panes.box("BUILDER", pad_to(panes.wrong_folder_content(state.cwd), pane_h), state.full_inner)
+          return panes.box("BUILDER", pad_to(panes.wrong_folder_content(state.cwd), body_h), state.full_inner)
         end
         if state.help then
-          return panes.box("HELP · cheatsheet", pad_to(panes.cheatsheet(), pane_h), state.full_inner)
+          local content = { panes.help_tabs(state), {} }
+          local tab = (state.help_tab == "commands") and panes.help_commands(state, state.full_inner)
+            or panes.help_shortcuts()
+          for _, l in ipairs(tab) do
+            content[#content + 1] = l
+          end
+          return panes.box("HELP", pad_to(content, body_h), state.full_inner)
         end
-        -- vertical (narrow screen): one pane, full width; Ctrl-t still cycles
+        local out = {}
+        local function append(lines)
+          for _, l in ipairs(lines) do
+            out[#out + 1] = l
+          end
+        end
         if state.winlayout == "vertical" then
-          return render_view(left_view(), state.full_inner, pane_h)
+          -- narrow screen: stack Pipeline, Processes, then the bottom view
+          append(render_view("pipeline", state.full_inner, state.top_h))
+          out[#out + 1] = {}
+          append(render_view("processes", state.full_inner, state.top_h))
+          out[#out + 1] = {}
+          if state.bottom == "stats" then
+            append(
+              panes.box(
+                TITLES.stats,
+                pad_to(panes.stats_content(state, state.full_inner), state.bottom_h),
+                state.full_inner
+              )
+            )
+          else
+            append(render_view("logs", state.full_inner, state.bottom_h))
+          end
+        else
+          append(top_row())
+          out[#out + 1] = {}
+          append(bottom_row(state.row_w, state.bottom_h))
         end
-        local left = render_view(left_view(), pane_inner, pane_h)
-        local right = render_view(right_view(), pane_inner, pane_h)
-        return ui.grid_col({
-          { lines = left, w = pane_inner + 4, pad = 1 },
-          { lines = divider(#left), w = 1, pad = 1 },
-          { lines = right, w = pane_inner + 4 },
-        })
+        return out
       end,
     },
     {
-      name = "indicator",
+      name = "footer",
       lines = function()
-        if not state.root or state.help then
-          return { {} }
-        end
-        local dots = { {} }
-        local row = { { "  " } }
-        for i, v in ipairs(RING) do
-          local on = (i == state.pane_i) or (i == (state.pane_i % #RING) + 1)
-          row[#row + 1] = { (on and "●" or "○") .. " ", on and "LedgerStateRunning" or "LedgerBuilderDim" }
-          row[#row + 1] = { TITLES[v]:lower() .. "  ", on and "LedgerBuilderTitle" or "LedgerBuilderDim" }
-        end
-        dots[#dots + 1] = row
-        return dots
+        return { {} } -- bottom margin (the logs/stats legend lives in `?` help)
       end,
     },
   }
@@ -232,9 +371,10 @@ local function redraw(which)
   end
 end
 
--- TyprStats-style sizing: single-pane ~80 wide, horizontal ~160; height a
--- modest content height (not full-screen). Responsive: vertical single-pane
--- when the screen is too narrow for two panes.
+-- Sizing: single-pane ~80 wide, horizontal ~160. Two stacked content rows —
+-- top (Pipeline | Processes) of height top_h, bottom (Logs or Stats) of height
+-- bottom_h. top_h is sized to fit the tallest platform's bordered pipeline
+-- table so both panes align; row_w is the shared content width both rows match.
 local function compute_dims()
   local horizontal = vim.o.columns > 170
   state.winlayout = horizontal and "horizontal" or "vertical"
@@ -246,7 +386,27 @@ local function compute_dims()
   else
     state.pane_inner = state.full_inner
   end
-  state.pane_h = math.max(10, math.min(18, vim.o.lines - 11))
+  -- top_h fits the pipeline: blank + target-state line + bar + blank (4) +
+  -- voltui.table (1 top border + 2 lines per row, rows = header + steps).
+  local pl = require("ledger.builder.pipeline")
+  local max_steps = math.max(
+    #pl.steps("desktop"),
+    #pl.steps("mobile", { platform_flag = "ios" }),
+    #pl.steps("mobile", { platform_flag = "android" })
+  )
+  -- blank+target+blank+bar+blank (5) + table(header+rule+steps+blank+run-tests = 4+steps)
+  local n_sub = 0
+  if state.show_substeps and state.substeps then
+    for _, list in pairs(state.substeps) do
+      n_sub = n_sub + #list
+    end
+  end
+  state.top_h = 9 + max_steps + n_sub
+  -- chrome ≈ header(6) + top borders(2) + separator(1) + bottom borders(2) + footer(1) + margin
+  state.bottom_h = math.max(8, math.min(16, vim.o.lines - state.top_h - 13))
+  -- shared row width so the logs/stats row aligns exactly with the top row:
+  -- top grid = left(pane_inner+4)+pad1 + divider(1)+pad1 + right(pane_inner+4)
+  state.row_w = horizontal and (2 * (state.pane_inner + 4) + 3) or (state.full_inner + 4)
 end
 
 -- Rebuild layout + buffer when section line counts change (tabs/subtab/pane/
@@ -271,20 +431,24 @@ end
 
 -- ── actions ──────────────────────────────────────────────────────────────────
 
-function M.run_template(template)
+function M.run_template(template, extra)
   if not state.root then
     return
   end
   local tasks = require("ledger.tasks")
-  local opts = { root = state.root }
+  local opts = vim.tbl_extend("force", { root = state.root }, extra or {})
   if state.platform == "mobile" then
     opts.config = state.config
     opts.platform_flag = state.platform_flag
+  else
+    opts.pwdebug = state.pwdebug == "1"
+    opts.mock = state.mock == "1"
   end
+  state.log_offset = 0 -- jump logs back to newest output
   tasks.run(template, opts)
   vim.defer_fn(function()
-    refresh_runtime()
-    redraw("body")
+    refresh_statuses()
+    redraw("all")
   end, 250)
 end
 
@@ -298,36 +462,87 @@ function M.run_step_by_id(id)
   vim.notify("Builder: no '" .. id .. "' step for this platform", vim.log.levels.WARN)
 end
 
+-- Record + launch a per-project sub-step under `parent` ("libs" for builds,
+-- "install" for scoped installs). `spec` = { template, label, projects?, filter? }.
+-- The sub-step shows as a navigable row under its parent (state + duration) and
+-- its log is pinned so it's visible.
+local function add_substep(parent, spec)
+  if not state.root or not spec.label or spec.label == "" then
+    return
+  end
+  state.substeps = state.substeps or {}
+  local list = state.substeps[parent] or {}
+  state.substeps[parent] = list
+  local rec, is_new
+  for _, s in ipairs(list) do
+    if s.project == spec.label then
+      rec = s
+      break
+    end
+  end
+  if not rec then
+    rec = { project = spec.label, task_id = "ss:" .. parent .. ":" .. spec.label, template = spec.template }
+    list[#list + 1] = rec
+    is_new = true
+  end
+  rec.run = { projects = spec.projects, filter = spec.filter }
+  rec.status = "in_progress"
+  state.log_id = rec.task_id -- pin the log so the rebuild's output is visible
+  state.bottom = "logs"
+  state.log_offset = 0
+  require("ledger.tasks").run(spec.template, {
+    root = state.root,
+    task_id = rec.task_id,
+    label = spec.label,
+    projects = spec.projects,
+    filter = spec.filter,
+    on_done = function()
+      if state then
+        refresh_statuses()
+        redraw("all")
+      end
+    end,
+  })
+  refresh_statuses()
+  if is_new and state.show_substeps then
+    rebuild() -- a new visible row → re-layout to fit it
+  else
+    redraw("all")
+  end
+end
+
 local function activate()
   if not state.root then
     return
   end
   local v = focused_view()
   if v == "pipeline" then
-    local step = (state.steps or {})[state.focus_idx]
-    if step and step.kind == "test" then
-      M.run_test()
-    elseif step and step.template then
-      M.run_template(step.template)
+    local it = require("ledger.builder.ui.panes").pipeline_items(state)[state.focus_idx]
+    if not it then
+      return
+    end
+    if it.kind == "runtests" then
+      if state.on_runtests then
+        state.on_runtests()
+      end
+    elseif it.kind == "step" then
+      if it.step.template then
+        M.run_template(it.step.template)
+      end
+    elseif it.kind == "substep" then -- Enter re-runs the sub-step
+      local run = it.sub.run or {}
+      add_substep(it.parent, {
+        template = it.sub.template,
+        label = it.sub.project,
+        projects = run.projects,
+        filter = run.filter,
+      })
     end
   elseif v == "processes" then
     local p = (state.procs or {})[state.focus_idx]
-    if not p then
-      return
+    if p then
+      M.proc_popup(p)
     end
-    local proc = require("ledger.builder.proc")
-    if p.alive then
-      proc.stop(p.name)
-    else
-      local ok, err = proc.start(p.name, { root = state.root })
-      if not ok then
-        vim.notify("Builder: " .. tostring(err), vim.log.levels.WARN)
-      end
-    end
-    vim.defer_fn(function()
-      refresh_runtime()
-      redraw("body")
-    end, 350)
   end
 end
 
@@ -354,9 +569,106 @@ local function proc_action(kind)
   end, 350)
 end
 
-local function cycle_pane(delta)
-  state.pane_i = ((state.pane_i - 1 + delta) % #RING) + 1
-  state.side = "left"
+-- Per-process popup: full info (command, port, uptime), log tail, and actions
+-- (s start / x kill / R restart / q close). Navigable with j/k.
+function M.proc_popup(p)
+  local proc = require("ledger.builder.proc")
+  local templates = require("ledger.tasks.templates")
+  local tasks = require("ledger.tasks")
+  local panes = require("ledger.builder.ui.panes")
+
+  local e = proc.by_name[p.name]
+  local command, log, uptime = nil, {}, nil
+  if e and e.start then
+    local spec = templates.resolve(e.start, { config = state.config, platform_flag = state.platform_flag }, state.root)
+    command = spec and spec.cmd
+    log = tasks.log_tail(e.start, 12)
+    local rec = tasks.tasks and tasks.tasks[e.start]
+    if rec and rec.started then
+      uptime = os.difftime(os.time(), rec.started) .. "s"
+    end
+  else
+    command = proc.detect_cmd(p.name) or "(started/detected externally)"
+  end
+
+  local content = panes.process_popup_content({
+    label = p.label,
+    command = command,
+    alive = p.alive,
+    port = p.port,
+    count = p.count,
+    uptime = uptime,
+    log = log,
+  })
+  local text = {}
+  for _, line in ipairs(content) do
+    local s = ""
+    for _, seg in ipairs(line) do
+      s = s .. (seg[1] or "")
+    end
+    text[#text + 1] = s
+  end
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, text)
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].bufhidden = "wipe"
+  local width = math.min(64, vim.o.columns - 4)
+  local height = math.min(#text, vim.o.lines - 6)
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = math.floor((vim.o.lines - height) / 2),
+    col = math.floor((vim.o.columns - width) / 2),
+    style = "minimal",
+    border = "rounded",
+    title = " " .. p.label .. " ",
+    title_pos = "center",
+    zindex = 260,
+  })
+  local hl = require("ledger.builder.ui.hl")
+  if hl.ns then
+    pcall(vim.api.nvim_win_set_hl_ns, win, hl.ns)
+  end
+  vim.wo[win].cursorline = true
+
+  local function close()
+    if vim.api.nvim_win_is_valid(win) then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+  end
+  local function act(fn)
+    fn()
+    close()
+    vim.defer_fn(function()
+      refresh_runtime()
+      redraw("body")
+    end, 350)
+  end
+  local opts = { buffer = buf, nowait = true, silent = true }
+  vim.keymap.set("n", "q", close, opts)
+  vim.keymap.set("n", "<Esc>", close, opts)
+  vim.keymap.set("n", "s", function()
+    act(function()
+      proc.start(p.name, { root = state.root })
+    end)
+  end, opts)
+  vim.keymap.set("n", "x", function()
+    act(function()
+      proc.stop(p.name)
+    end)
+  end, opts)
+  vim.keymap.set("n", "R", function()
+    act(function()
+      proc.restart(p.name, { root = state.root })
+    end)
+  end, opts)
+end
+
+-- < / > swap the bottom row between Logs and Stats (Pipeline + Processes stay).
+local function toggle_bottom()
+  state.bottom = state.bottom == "stats" and "logs" or "stats"
   rebuild()
 end
 
@@ -449,9 +761,19 @@ end
 -- detox configuration (iOS vs Android lists).
 local function pick_env()
   if state.platform == "desktop" then
-    open_menu("PWDEBUG", { "PWDEBUG=0", "PWDEBUG=1" }, "PWDEBUG=" .. (state.pwdebug or "0"), function(c)
-      state.pwdebug = c:match("=(%d)")
-      redraw("all")
+    -- desktop has no detox config: choose the build profile + MOCK
+    local choices = { "build: testing", "build: staging", "MOCK: off", "MOCK: on" }
+    open_menu("Desktop env", choices, "build: " .. (state.desktop_build or "testing"), function(c)
+      local b = c:match("^build:%s*(%S+)")
+      if b then
+        state.desktop_build = b
+        refresh_statuses()
+        rebuild()
+      else
+        local m = c:match("MOCK:%s*(%S+)")
+        state.mock = (m == "on") and "1" or "0"
+        redraw("all")
+      end
     end)
   else
     local choices = state.platform_flag == "android" and ANDROID_CONFIGS or IOS_CONFIGS
@@ -461,6 +783,121 @@ local function pick_env()
       rebuild()
     end)
   end
+end
+
+-- Toggle PWDEBUG (desktop Playwright inspector); no-op on mobile.
+local function pick_pwdebug()
+  if state.platform ~= "desktop" then
+    return
+  end
+  state.pwdebug = (state.pwdebug == "1") and "0" or "1"
+  redraw("all")
+end
+
+-- ── watch + per-project targeting ───────────────────────────────────────────
+
+-- Switch the watch mode: "on-save" (Neovim rebuilds the saved file's nx project
+-- via the BufWritePost autocmd — daemon-free), "nx" (the nx watch daemon, which
+-- needs NX_DAEMON=true here), or "off".
+local function set_watch_mode(mode)
+  if not state.root then
+    return
+  end
+  local tasks = require("ledger.tasks")
+  if mode == "nx" then
+    if not tasks.is_running("shared.nx.watch") then
+      tasks.run("shared.nx.watch", { root = state.root })
+    end
+  elseif tasks.is_running("shared.nx.watch") then
+    tasks.stop("shared.nx.watch") -- leaving nx mode → stop the daemon
+  end
+  state.watch_mode = mode
+  state.watching = mode ~= "off"
+  redraw("all")
+end
+
+local function watch_menu()
+  if not state.root then
+    return
+  end
+  local cur = state.watch_mode == "nx" and "nx watch (daemon)" or state.watch_mode
+  open_menu("Watch", { "on-save", "nx watch (daemon)", "off" }, cur, function(c)
+    set_watch_mode(c:find("^nx") and "nx" or (c == "off" and "off" or "on-save"))
+  end)
+end
+
+-- On-save incremental rebuild: rebuild just the nx project owning the saved
+-- file. Debounced per project (reuses the prefetch.lua tick pattern).
+local _watch_ticks = {}
+local function on_save_rebuild(abspath)
+  if not (state and state.root and state.watch_mode == "on-save") then
+    return
+  end
+  local proj = require("ledger.builder.nx").buildable_project_for_file(state.root, abspath)
+  if not proj then
+    return
+  end
+  _watch_ticks[proj] = (_watch_ticks[proj] or 0) + 1
+  local tick = _watch_ticks[proj]
+  vim.defer_fn(function()
+    if _watch_ticks[proj] ~= tick or not (state and state.root and state.watch_mode == "on-save") then
+      return
+    end
+    add_substep("libs", { template = "shared.nx.build", label = proj, projects = { proj } })
+  end, 400)
+end
+
+-- Pick one nx project via vim.ui.select (routes to the user's Telescope UI).
+local function nx_pick_project(prompt, cb)
+  local projects = require("ledger.builder.nx").projects(state.root)
+  if #projects == 0 then
+    vim.notify("Builder: no nx project graph yet — build once, then retry", vim.log.levels.WARN)
+    return
+  end
+  local names = {}
+  for _, p in ipairs(projects) do
+    names[#names + 1] = p.name
+  end
+  table.sort(names)
+  vim.ui.select(names, { prompt = prompt }, function(choice)
+    if choice and choice ~= "" then
+      cb(choice)
+    end
+  end)
+end
+
+-- Build a specific nx project (current file's / picked / by filter). Runs through
+-- the Builder as a sub-step under `libs`, so status + logs update like any step.
+local function target_menu()
+  if not state.root then
+    return
+  end
+  local items = {
+    "Build current file's project",
+    "Build project…",
+    "Build by filter…",
+  }
+  open_menu("Build a project", items, nil, function(c)
+    if c == "Build current file's project" then
+      local f = vim.fn.expand("#:p") -- the file edited before the Builder took focus
+      local proj = f ~= "" and require("ledger.builder.nx").project_for_file(state.root, f) or nil
+      if not proj then
+        vim.notify("Builder: the previous buffer isn't inside an nx project", vim.log.levels.WARN)
+        return
+      end
+      add_substep("libs", { template = "shared.nx.build", label = proj, projects = { proj } })
+    elseif c == "Build project…" then
+      nx_pick_project("Build nx project:", function(p)
+        add_substep("libs", { template = "shared.nx.build", label = p, projects = { p } })
+      end)
+    elseif c == "Build by filter…" then
+      vim.ui.input({ prompt = "Build -p filter: " }, function(f)
+        if f and f ~= "" then
+          add_substep("libs", { template = "shared.nx.build", label = f, filter = f })
+        end
+      end)
+    end
+  end)
 end
 
 -- ── run-a-test flow (All / Pick file / By name|ticket, with discovery) ───────
@@ -481,14 +918,16 @@ local function do_run_test(scope_opts)
   local opts = vim.tbl_extend("force", { root = state.root }, scope_opts or {})
   if state.platform == "desktop" then
     opts.pwdebug = state.pwdebug == "1"
+    opts.mock = state.mock == "1"
   else
     opts.config = state.config
     opts.platform_flag = state.platform_flag
   end
+  state.log_offset = 0
   tasks.run(id, opts)
   vim.defer_fn(function()
-    refresh_runtime()
-    redraw("body")
+    refresh_statuses()
+    redraw("all")
   end, 250)
 end
 
@@ -607,6 +1046,9 @@ end
 
 local function fix_menu()
   local items = { { label = "Global fix (reinstall node_modules + store)", id = "fix.global" } }
+  if state.platform == "desktop" then
+    items[#items + 1] = { label = "Install Playwright browser", id = "desktop.pw.setup" }
+  end
   if state.platform == "mobile" and state.platform_flag == "ios" then
     items[#items + 1] = { label = "iOS pod fix (reset Pods)", id = "fix.ios_pod" }
   end
@@ -620,7 +1062,7 @@ local function fix_menu()
   open_menu("Fix / maintenance", labels, nil, function(choice)
     local id = by_label[choice]
     if id then
-      require("ledger.tasks").run(id)
+      require("ledger.tasks").run(id, { root = state.root })
     end
   end)
 end
@@ -633,7 +1075,24 @@ end
 -- ── timers / animation ───────────────────────────────────────────────────────
 
 local function start_timer()
+  local anim = cfg().animation or "max"
+  local animated = anim == "max" or anim == "tasteful"
   state.timer = uv.new_timer()
+  if not animated then
+    -- "minimal" / "off": no spinner animation, just poll process liveness.
+    state.timer:start(
+      2000,
+      2000,
+      vim.schedule_wrap(function()
+        if not (state and state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
+          return
+        end
+        refresh_runtime()
+        redraw("body")
+      end)
+    )
+    return
+  end
   state.timer:start(
     SPIN_MS,
     SPIN_MS,
@@ -667,6 +1126,7 @@ local function install_callbacks()
   state.on_subplatform = set_subplatform
   state.on_device = pick_device
   state.on_env = pick_env
+  state.on_pwdebug = pick_pwdebug
   state.on_step = function(i)
     -- focus the pipeline pane wherever it currently is, then run
     if left_view() == "pipeline" then
@@ -692,52 +1152,221 @@ end
 
 -- ── keymaps ───────────────────────────────────────────────────────────────────
 
+-- Run every NOT-done step for the target in order, chaining on success and
+-- stopping on the first failure. mode "build" runs only steps whose status isn't
+-- `done` and SKIPS the clean step; "clean" forces every step (clean included,
+-- it's first). Tests are NEVER run here.
+local function run_all(mode)
+  if not state.root then
+    return
+  end
+  local seq = {} -- list of { label, template }
+  local function add(label, template)
+    seq[#seq + 1] = { label = label, template = template }
+  end
+  for _, s in ipairs(state.steps or {}) do
+    -- clean wipes everything (git clean -fdX); only the explicit
+    -- "clean + reinstall" mode runs it, never a plain build.
+    if not (s.id == "clean" and mode ~= "clean") then
+      if s.template and (mode == "clean" or (state.statuses or {})[s.id] ~= "done") then
+        add(s.label, s.template)
+      end
+    end
+  end
+  if #seq == 0 then
+    vim.notify("Builder: everything is already up to date ✓", vim.log.levels.INFO)
+    return
+  end
+  local function run_at(i)
+    if i > #seq then
+      vim.notify("Builder: run-all complete ✓", vim.log.levels.INFO)
+      return
+    end
+    local step = seq[i]
+    M.run_template(step.template, {
+      on_done = function(code)
+        refresh_statuses()
+        redraw("all")
+        if code == 0 then
+          run_at(i + 1)
+        else
+          vim.notify("Builder: run-all stopped at '" .. step.label .. "' (exit " .. code .. ")", vim.log.levels.ERROR)
+        end
+      end,
+    })
+  end
+  run_at(1)
+end
+
+local function run_all_menu()
+  if not state.root then
+    return
+  end
+  local target = state.platform == "desktop" and "desktop" or state.platform_flag
+  open_menu("run all (" .. target .. ")", { "Run all", "Clean + reinstall + run all" }, "Run all", function(c)
+    run_all(c == "Clean + reinstall + run all" and "clean" or "build")
+  end)
+end
+
+-- Is the Playwright browser installed? (single source of truth in panes)
+local function pw_installed()
+  return require("ledger.builder.ui.panes").pw_installed()
+end
+
+-- The "Run tests" action — gated on the target being READY (and, on desktop,
+-- the Playwright browser being installed; if missing, install it instead).
+local function run_tests_gated()
+  if not state.root then
+    return
+  end
+  local tstate = require("ledger.builder.pipeline").target_state(state.steps, state.statuses or {})
+  if tstate ~= "ready" then
+    vim.notify("Builder: target not ready — build it first (A)", vim.log.levels.WARN)
+    return
+  end
+  if state.platform == "desktop" and not pw_installed() then
+    vim.notify("Builder: installing the Playwright browser (one-time)…", vim.log.levels.INFO)
+    M.run_template("desktop.pw.setup")
+    return
+  end
+  M.run_test()
+end
+
+-- Toggle the Nx watcher daemon (keeps the live libs rebuilt on change).
 local function set_keymaps()
   local buf = state.buf
   local function map(lhs, fn)
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true })
   end
-  local function move(delta)
-    state.focus_idx = (state.focus_idx or 1) + delta
-    sync_focus()
+  -- scroll the Logs content only (offset 0 = newest); no-op unless Logs is shown
+  -- The log id currently shown: a pinned ad-hoc/watch log (state.log_id), else
+  -- the focused pipeline item's task (step or sub-step), else the last started.
+  local function current_log_id()
+    if state.log_id then
+      return state.log_id
+    end
+    local tasks = require("ledger.tasks")
+    if state.focus and state.focus.col == "pipeline" then
+      local it = require("ledger.builder.ui.panes").pipeline_items(state)[state.focus_idx]
+      if it then
+        return (it.step and it.step.template) or (it.sub and it.sub.task_id) or tasks.last_started
+      end
+    end
+    return tasks.last_started
+  end
+  local function scroll(delta)
+    if state.bottom ~= "logs" then
+      return
+    end
+    local tasks = require("ledger.tasks")
+    local id = current_log_id()
+    local len = id and tasks.log_len(id) or 0
+    local maxoff = math.max(0, len - state.bottom_h)
+    state.log_offset = math.max(0, math.min((state.log_offset or 0) + delta, maxoff))
     redraw("body")
   end
-  local function side(s)
-    state.side = s
+  -- Copy the currently-shown log to the clipboard (the panel is extmark
+  -- virt_text, so it can't be visually selected). Same id rule as scroll().
+  local function copy_logs()
+    if state.bottom ~= "logs" then
+      vim.notify("Builder: switch to the Logs view first (<)", vim.log.levels.WARN)
+      return
+    end
+    local tasks = require("ledger.tasks")
+    local id = current_log_id()
+    local len = id and tasks.log_len(id) or 0
+    if len == 0 then
+      vim.notify("Builder: no logs to copy", vim.log.levels.WARN)
+      return
+    end
+    local text = table.concat(tasks.log_tail(id, len), "\n")
+    vim.fn.setreg("+", text)
+    vim.fn.setreg('"', text)
+    vim.notify("Builder: copied " .. len .. " log lines to the clipboard (+)", vim.log.levels.INFO)
+  end
+  -- 2-D navigation: Pipeline is the left column (steps + the Run-tests row),
+  -- Processes is a right-hand card grid. Map flat focus_idx ↔ (row,col) via the
+  -- same tiling panes uses, so left/right move between card columns too.
+  local function proc_pos(idx)
+    local rows = require("ledger.builder.ui.panes").proc_tile(#(state.procs or {}))
+    local seen = 0
+    for r, ncol in ipairs(rows) do
+      if idx <= seen + ncol then
+        return r, idx - seen, rows
+      end
+      seen = seen + ncol
+    end
+    return 1, 1, rows
+  end
+  local function proc_idx(rows, row, col)
+    row = math.max(1, math.min(row, #rows))
+    col = math.max(1, math.min(col, rows[row]))
+    local seen = 0
+    for r = 1, row - 1 do
+      seen = seen + rows[r]
+    end
+    return seen + col
+  end
+  local function nav(dir)
+    state.log_id = nil -- taking control of navigation unpins the auto-shown log
+    if focused_view() == "pipeline" then
+      local n = #require("ledger.builder.ui.panes").pipeline_items(state)
+      if dir == "up" then
+        state.focus_idx = math.max(1, (state.focus_idx or 1) - 1)
+      elseif dir == "down" then
+        state.focus_idx = math.min(n, (state.focus_idx or 1) + 1)
+      elseif dir == "right" and #(state.procs or {}) > 0 then
+        state.side, state.focus_idx = "right", 1
+      end
+    else -- processes grid
+      local row, col, rows = proc_pos(state.focus_idx or 1)
+      if dir == "up" then
+        state.focus_idx = proc_idx(rows, row - 1, col)
+      elseif dir == "down" then
+        state.focus_idx = proc_idx(rows, row + 1, col)
+      elseif dir == "right" then
+        state.focus_idx = proc_idx(rows, row, col + 1)
+      elseif dir == "left" then
+        if col > 1 then
+          state.focus_idx = proc_idx(rows, row, col - 1)
+        else
+          state.side = "left" -- escape to Pipeline
+        end
+      end
+    end
     sync_focus()
     redraw("body")
   end
 
-  -- within-column nav (Tab is now the platform switch, see below)
-  for _, k in ipairs({ "j", "<Down>" }) do
-    map(k, function()
-      move(1)
+  for _, kv in ipairs({
+    { "j", "down" },
+    { "<Down>", "down" },
+    { "k", "up" },
+    { "<Up>", "up" },
+    { "l", "right" },
+    { "<Right>", "right" },
+    { "h", "left" },
+    { "<Left>", "left" },
+  }) do
+    map(kv[1], function()
+      nav(kv[2])
     end)
   end
-  for _, k in ipairs({ "k", "<Up>" }) do
-    map(k, function()
-      move(-1)
-    end)
+  -- Tab / Shift-Tab toggle Desktop ↔ Mobile — or, while help is open, cycle the
+  -- help tabs (Shortcuts ↔ Cheatsheet).
+  local function tab_key()
+    if state.help then
+      state.help_tab = (state.help_tab == "commands") and "shortcuts" or "commands"
+      rebuild()
+    else
+      set_platform(state.platform == "desktop" and "mobile" or "desktop")
+    end
   end
-  for _, k in ipairs({ "l", "<Right>" }) do
-    map(k, function()
-      side("right")
-    end)
-  end
-  for _, k in ipairs({ "h", "<Left>" }) do
-    map(k, function()
-      side("left")
-    end)
-  end
-  -- Tab / Shift-Tab toggle Desktop ↔ Mobile
-  local function toggle_platform()
-    set_platform(state.platform == "desktop" and "mobile" or "desktop")
-  end
-  map("<Tab>", toggle_platform)
-  map("<S-Tab>", toggle_platform)
-  map("<C-t>", function()
-    cycle_pane(1)
-  end)
+  map("<Tab>", tab_key)
+  map("<S-Tab>", tab_key)
+  map(">", toggle_bottom)
+  map("<", toggle_bottom)
+  map("<C-t>", toggle_bottom)
   map("<CR>", activate)
   map("x", function()
     proc_action("kill")
@@ -748,18 +1377,19 @@ local function set_keymaps()
   map("B", function()
     M.run_step_by_id("build")
   end)
-  map("r", M.run_test)
+  -- tests run from the navigable "Run tests" pipeline row (j to it, then <CR>)
+  map("w", watch_menu)
+  map("t", target_menu)
+  map("z", function() -- fold / unfold the per-project sub-steps
+    state.show_substeps = not state.show_substeps
+    rebuild()
+  end)
   map("F", fix_menu)
   map("R", function()
     refresh_statuses()
     redraw("all")
   end)
-  map("D", function()
-    set_platform("desktop")
-  end)
-  map("M", function()
-    set_platform("mobile")
-  end)
+  map("p", pick_pwdebug)
   map("i", function()
     if state.platform == "mobile" then
       set_subplatform("ios")
@@ -772,54 +1402,56 @@ local function set_keymaps()
   end)
   map("e", pick_env)
   map("d", pick_device)
+  map("A", run_all_menu)
+  -- nx.nvim launcher: hide the Builder, then open its Telescope picker to run an
+  -- arbitrary nx target. nx.nvim runs it in a :terminal — no status/log feedback
+  -- here (it captures nothing); the pipeline keeps tracking real builds via .nx.
+  map("n", function()
+    M.hide()
+    vim.schedule(function()
+      if not pcall(vim.cmd, "Telescope nx actions") then
+        vim.notify("nx.nvim / telescope not available", vim.log.levels.WARN)
+      end
+    end)
+  end)
+  -- log scroll (mouse wheel + Ctrl-u/d), active only when Logs is shown
+  map("<ScrollWheelUp>", function()
+    scroll(3)
+  end)
+  map("<ScrollWheelDown>", function()
+    scroll(-3)
+  end)
+  map("<C-u>", function()
+    scroll(5)
+  end)
+  map("<C-d>", function()
+    scroll(-5)
+  end)
+  map("y", copy_logs)
   map("?", toggle_help)
-  map("q", M.close)
-  map("<Esc>", M.close)
+  map("q", M.hide)
+  map("<Esc>", M.hide)
 end
 
 -- ── open / close ──────────────────────────────────────────────────────────────
 
-function M.open()
-  if state and state.win and vim.api.nvim_win_is_valid(state.win) then
-    vim.api.nvim_set_current_win(state.win)
-    return
-  end
+M._opening = false
 
+-- Open the float on the (already-initialised) state.buf and wire it up. Shared
+-- by a fresh build() and a re-show() so toggling preserves state.
+local function mount()
   local volt = require("volt")
   local builder_cfg = cfg()
-  require("ledger.builder.ui.hl").setup({ transparent = builder_cfg.transparent })
+  local ns = require("ledger.builder.ui.hl").setup()
+  local border = builder_cfg.border and "single" or "none"
 
-  -- Detect from the CURRENT working dir only (no monorepo_root fallback): if
-  -- you're not inside a ledger-live checkout, the Builder must say so.
-  local detox = require("ledger.detox")
-  local cwd = (vim.uv or vim.loop).cwd()
-  local detected = detox.get_repo_root()
-  local root = detox.is_ledger_root(detected) and detected or nil
-
-  state = {
-    platform = "desktop",
-    platform_flag = "ios",
-    config = default_config("ios"),
-    pwdebug = "0",
-    tick = 0,
-    root = root,
-    cwd = cwd,
-    help = false,
-    pane_i = 1,
-    side = "left",
-    focus_idx = 1,
-    buf = vim.api.nvim_create_buf(false, true),
-    vns = vim.api.nvim_create_namespace("ledger_builder"),
-    steps = {},
-    statuses = {},
-    procs = {},
-  }
-
-  install_callbacks()
   compute_dims()
   refresh_meta()
   refresh_statuses()
 
+  -- a re-shown buffer is still nomodifiable from the prior session; volt.run
+  -- needs to write the blank canvas, so re-enable writes before rendering.
+  vim.bo[state.buf].modifiable = true
   volt.gen_data({ { buf = state.buf, layout = sections(), xpad = 2, ns = state.vns } })
   local h = require("volt.state")[state.buf].h
   local width = state.W + 4
@@ -830,45 +1462,147 @@ function M.open()
     row = math.floor((vim.o.lines - h) / 2),
     col = math.floor((vim.o.columns - width) / 2),
     style = "minimal",
-    border = "rounded",
-    title = " Ledger Builder ",
-    title_pos = "center",
+    border = border, -- the border carries no title (see config.builder.border)
   })
 
-  -- opaque, theme-tracking panel via a window-local highlight namespace
-  local hl = require("ledger.builder.ui.hl")
-  if hl.ns then
-    vim.api.nvim_win_set_hl_ns(state.win, hl.ns)
-  end
-  vim.wo[state.win].winhighlight =
-    "Normal:LedgerBuilderNormal,NormalFloat:LedgerBuilderNormal,FloatBorder:LedgerBuilderTitle"
+  -- opaque, theme-tracking panel via the window-local highlight namespace
+  pcall(vim.api.nvim_win_set_hl_ns, state.win, ns)
   if builder_cfg.transparent then
     vim.wo[state.win].winblend = 0
   end
 
   volt.run(state.buf, { h = h, w = state.W })
 
-  -- MOUSE: register the buffer with volt's event system (this is what makes
-  -- the {text, hl, fn} segments clickable).
+  -- MOUSE: register the buffer with volt's event system.
   local volt_events = require("volt.events")
   volt_events.add(state.buf)
   volt_events.enable()
 
   set_keymaps() -- after add() so our nav keys win over volt's defaults
 
+  -- closing the window HIDES (keeps state); use M.close for a hard reset
   vim.api.nvim_create_autocmd("WinClosed", {
     buffer = state.buf,
     once = true,
     callback = function()
-      vim.schedule(M.close)
+      vim.schedule(M.hide)
     end,
   })
 
   start_timer()
 end
 
+-- Fresh build (after the loader). Initialises state, then mounts.
+local function build()
+  M._opening = false
+  require("ledger.builder.ui.loader").close()
+
+  -- Detect from the CURRENT working dir only (no monorepo_root fallback).
+  local detox = require("ledger.detox")
+  local cwd = (vim.uv or vim.loop).cwd()
+  local detected = detox.get_repo_root()
+  local root = detox.is_ledger_root(detected) and detected or nil
+
+  state = {
+    platform = "desktop",
+    platform_flag = "ios",
+    config = default_config("ios"),
+    desktop_build = "testing",
+    pwdebug = "0",
+    tick = 0,
+    root = root,
+    cwd = cwd,
+    help = false,
+    help_tab = "shortcuts",
+    bottom = "logs",
+    log_offset = 0,
+    watching = false,
+    watch_mode = (require("ledger.config").get().builder or {}).watch_default or "on-save",
+    substeps = {}, -- per-project rebuild/install rows, keyed by parent step id
+    show_substeps = (require("ledger.config").get().builder or {}).substeps_default ~= false,
+    log_id = nil, -- pinned log (ad-hoc/watch task); cleared on navigation
+    side = "left",
+    focus_idx = 1,
+    buf = vim.api.nvim_create_buf(false, true),
+    vns = vim.api.nvim_create_namespace("ledger_builder"),
+    steps = {},
+    statuses = {},
+    procs = {},
+  }
+
+  install_callbacks()
+  state.on_runtests = run_tests_gated -- the Run-tests button + r
+  state.on_watch = watch_menu -- the header watch chip + w
+  -- on-save incremental rebuild (fires only while watch_mode == "on-save")
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    group = vim.api.nvim_create_augroup("ledger_builder_watch", { clear = true }),
+    callback = function(args)
+      if vim.bo[args.buf].buftype ~= "" then
+        return
+      end
+      local f = vim.api.nvim_buf_get_name(args.buf)
+      if f ~= "" then
+        on_save_rebuild(f)
+      end
+    end,
+  })
+  mount()
+  if state.watch_mode == "nx" then
+    set_watch_mode("nx") -- defaulted to the nx daemon → start it
+  end
+end
+
+function M.open()
+  if state and state.win and vim.api.nvim_win_is_valid(state.win) then
+    vim.api.nvim_set_current_win(state.win)
+    return
+  end
+  if M._opening then
+    return
+  end
+  local builder_cfg = cfg()
+  if builder_cfg.loader ~= false then
+    M._opening = true
+    require("ledger.builder.ui.loader").open("Loading Ledger Builder")
+    vim.defer_fn(build, 420)
+  else
+    build()
+  end
+end
+
+-- Hide the window but KEEP state + buffer, so re-opening restores everything.
+function M.hide()
+  stop_timer()
+  M._opening = false
+  pcall(function()
+    require("ledger.builder.ui.loader").close()
+  end)
+  if state and state.win and vim.api.nvim_win_is_valid(state.win) then
+    pcall(vim.api.nvim_win_close, state.win, true)
+  end
+  if state then
+    state.win = nil
+  end
+end
+
+-- Re-show a hidden Builder on its preserved buffer (no loader); else open fresh.
+function M.show()
+  if state and state.win and vim.api.nvim_win_is_valid(state.win) then
+    vim.api.nvim_set_current_win(state.win)
+  elseif state and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+    mount()
+  else
+    M.open()
+  end
+end
+
+-- Hard reset: destroy the window, buffer and state.
 function M.close()
   stop_timer()
+  M._opening = false
+  pcall(function()
+    require("ledger.builder.ui.loader").close()
+  end)
   if state then
     local win, buf = state.win, state.buf
     state = nil
@@ -883,7 +1617,9 @@ end
 
 function M.toggle()
   if state and state.win and vim.api.nvim_win_is_valid(state.win) then
-    M.close()
+    M.hide()
+  elseif state and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+    M.show()
   else
     M.open()
   end
