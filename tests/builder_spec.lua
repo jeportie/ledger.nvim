@@ -632,10 +632,20 @@ describe("ledger.builder.ui.panes", function()
   end)
 
   it("stats panes start with a blank line and the chart fills the card", function()
-    require("ledger.config").setup({ builder = { mock_stats = true } })
+    local history = require("ledger.builder.history")
+    history._entries = {} -- seed in-memory only (no disk write → no cross-spec coupling)
+    -- first line is a blank breathing-room row even with no data
     assert.same({}, panes.stats_history(fake, 30)[1])
     assert.same({}, panes.stats_buildtime(fake, 30)[1])
     assert.same({}, panes.stats_passrate(fake, 30)[1])
+    -- seed build history for the target so the chart renders, then verify it
+    -- fills the card (a wider card → wider bars)
+    local target = fake.platform == "desktop" and "desktop" or fake.platform_flag
+    local entries = {}
+    for i = 1, 6 do
+      entries[i] = { time = i, label = "b" .. i, kind = "build", code = 0, duration = 30 + i, platform = target }
+    end
+    history._entries = entries
     local ui = require("volt.ui")
     local function maxw(lines)
       local m = 0
@@ -645,6 +655,7 @@ describe("ledger.builder.ui.panes", function()
       return m
     end
     assert.is_true(maxw(panes.stats_buildtime(fake, 60)) > maxw(panes.stats_buildtime(fake, 24)))
+    history._entries = {} -- leave the in-memory cache clean
   end)
 
   it("processes tile to fill the pane (2/3/4 → grid that fills height)", function()
@@ -681,15 +692,11 @@ describe("ledger.builder.ui.panes", function()
     assert.is_truthy(flat(panes.help_commands(fake, 100)):find("Pipeline", 1, true))
   end)
 
-  it("stats render mock data per target when history is empty", function()
-    require("ledger.config").setup({ builder = { mock_stats = true } })
-    local function target(p, f)
-      return vim.tbl_extend("force", {}, fake, { platform = p, platform_flag = f })
-    end
-    -- non-empty for each target (mock fallback), and not the empty placeholder
-    assert.is_nil(flat(panes.stats_history(target("desktop"), 30)):find("no runs yet", 1, true))
-    assert.is_nil(flat(panes.stats_history(target("mobile", "ios"), 30)):find("no runs yet", 1, true))
-    assert.is_nil(flat(panes.stats_history(target("mobile", "android"), 30)):find("no runs yet", 1, true))
+  it("stats show empty-state messages when history is empty", function()
+    require("ledger.builder.history")._entries = {} -- in-memory only
+    assert.is_truthy(flat(panes.stats_history(fake, 30)):find("no runs yet", 1, true))
+    assert.is_truthy(flat(panes.stats_buildtime(fake, 30)):find("no builds yet", 1, true))
+    assert.is_truthy(flat(panes.stats_passrate(fake, 30)):find("no test runs yet", 1, true))
   end)
 
   it("process popup content has command, log + action footer", function()

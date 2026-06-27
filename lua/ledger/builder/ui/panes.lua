@@ -627,18 +627,10 @@ local function stats_target(st)
   return st.platform == "desktop" and "desktop" or st.platform_flag
 end
 
--- TEMP: seed empty Stats with per-target mock data when builder.mock_stats is on.
-local function mock_on()
-  return (require("ledger.config").get().builder or {}).mock_stats == true
-end
-
 function M.stats_history(st, inner_w)
   local history = require("ledger.builder.history")
   local target = stats_target(st)
   local recent = history.recent(8, nil, target)
-  if #recent == 0 and mock_on() then
-    recent = require("ledger.builder.mock").recent(target)
-  end
   if #recent == 0 then
     return { {}, { { "no runs yet", "LedgerBuilderDim" } } }
   end
@@ -664,9 +656,6 @@ function M.stats_buildtime(st, inner_w)
   local ui = require("volt.ui")
   local target = stats_target(st)
   local durs = history.build_durations(12, target)
-  if #durs == 0 and mock_on() then
-    durs = require("ledger.builder.mock").build_durations(target)
-  end
   if #durs == 0 then
     return { {}, { { "no builds yet", "LedgerBuilderDim" } } }
   end
@@ -710,9 +699,6 @@ function M.stats_passrate(st, inner_w)
   local ui = require("volt.ui")
   local target = stats_target(st)
   local rate, n = history.pass_rate(50, target)
-  if not rate and mock_on() then
-    rate, n = require("ledger.builder.mock").pass_rate(target)
-  end
   if not rate then
     return { {}, { { "no test runs yet", "LedgerBuilderDim" } } }
   end
