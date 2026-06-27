@@ -586,17 +586,25 @@ function M.process_popup_content(info)
   return lines
 end
 
+-- The task id whose log the panel shows: a pinned ad-hoc/watch log (st.log_id),
+-- else the focused pipeline item's task (step or sub-step), else the last started.
+function M.current_log_id(st)
+  if st.log_id then
+    return st.log_id
+  end
+  if st.focus and st.focus.col == "pipeline" then
+    local it = M.pipeline_items(st)[st.focus.idx]
+    if it then
+      return (it.step and it.step.template) or (it.sub and it.sub.task_id) or nil
+    end
+  end
+  return require("ledger.tasks").last_started
+end
+
 function M.logs_content(st, height, width)
   local tasks = require("ledger.tasks")
   width = width or 50
-  local id = st.log_id -- a pinned ad-hoc/watch log wins
-  if not id and st.focus and st.focus.col == "pipeline" then
-    local it = M.pipeline_items(st)[st.focus.idx]
-    if it then
-      id = (it.step and it.step.template) or (it.sub and it.sub.task_id) or nil
-    end
-  end
-  id = id or tasks.last_started
+  local id = M.current_log_id(st)
   -- scroll window: offset 0 = newest tail; st.log_offset scrolls older
   local win = id and tasks.log_window(id, st.log_offset or 0, height or 12) or {}
   if #win == 0 then
