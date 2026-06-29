@@ -24,9 +24,6 @@ M.defaults = {
     loader = true, -- show the loader animation on open
     animation = "max", -- "max" | "tasteful" | "minimal" | "off"
     backdrop = true, -- dim the rest of the editor while open
-    -- TEMP (visual review only): seed the Stats panes with per-target mock data
-    -- when there's no real history yet. Set false / remove once the look is approved.
-    mock_stats = true,
     -- where Playwright installs its browser binaries (once per machine). Leave
     -- nil to auto-detect per OS ($PLAYWRIGHT_BROWSERS_PATH, then the OS default:
     -- ~/Library/Caches/ms-playwright on macOS, ~/.cache/ms-playwright on Linux);

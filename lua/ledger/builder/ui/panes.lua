@@ -586,17 +586,30 @@ function M.process_popup_content(info)
   return lines
 end
 
+-- The task id whose log the panel shows: a pinned ad-hoc/watch log (st.log_id),
+-- else the focused pipeline item's task (step or sub-step), else the last started.
+function M.current_log_id(st)
+  if st.log_id then
+    return st.log_id
+  end
+  if st.focus and st.focus.col == "pipeline" then
+    local it = M.pipeline_items(st)[st.focus.idx]
+    if it then
+      -- a focused item with a task shows its log; one without (the Run-tests
+      -- row) falls through to last_started below — do NOT return nil here.
+      local id = (it.step and it.step.template) or (it.sub and it.sub.task_id)
+      if id then
+        return id
+      end
+    end
+  end
+  return require("ledger.tasks").last_started
+end
+
 function M.logs_content(st, height, width)
   local tasks = require("ledger.tasks")
   width = width or 50
-  local id = st.log_id -- a pinned ad-hoc/watch log wins
-  if not id and st.focus and st.focus.col == "pipeline" then
-    local it = M.pipeline_items(st)[st.focus.idx]
-    if it then
-      id = (it.step and it.step.template) or (it.sub and it.sub.task_id) or nil
-    end
-  end
-  id = id or tasks.last_started
+  local id = M.current_log_id(st)
   -- scroll window: offset 0 = newest tail; st.log_offset scrolls older
   local win = id and tasks.log_window(id, st.log_offset or 0, height or 12) or {}
   if #win == 0 then
@@ -627,18 +640,10 @@ local function stats_target(st)
   return st.platform == "desktop" and "desktop" or st.platform_flag
 end
 
--- TEMP: seed empty Stats with per-target mock data when builder.mock_stats is on.
-local function mock_on()
-  return (require("ledger.config").get().builder or {}).mock_stats == true
-end
-
 function M.stats_history(st, inner_w)
   local history = require("ledger.builder.history")
   local target = stats_target(st)
   local recent = history.recent(8, nil, target)
-  if #recent == 0 and mock_on() then
-    recent = require("ledger.builder.mock").recent(target)
-  end
   if #recent == 0 then
     return { {}, { { "no runs yet", "LedgerBuilderDim" } } }
   end
@@ -664,9 +669,6 @@ function M.stats_buildtime(st, inner_w)
   local ui = require("volt.ui")
   local target = stats_target(st)
   local durs = history.build_durations(12, target)
-  if #durs == 0 and mock_on() then
-    durs = require("ledger.builder.mock").build_durations(target)
-  end
   if #durs == 0 then
     return { {}, { { "no builds yet", "LedgerBuilderDim" } } }
   end
@@ -710,9 +712,6 @@ function M.stats_passrate(st, inner_w)
   local ui = require("volt.ui")
   local target = stats_target(st)
   local rate, n = history.pass_rate(50, target)
-  if not rate and mock_on() then
-    rate, n = require("ledger.builder.mock").pass_rate(target)
-  end
   if not rate then
     return { {}, { { "no test runs yet", "LedgerBuilderDim" } } }
   end

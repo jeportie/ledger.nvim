@@ -24,6 +24,9 @@ local ANDROID_CONFIGS = { "android.emu.release", "android.emu.prerelease" }
 
 local state = nil
 
+local menus = require("ledger.builder.menus") -- open_menu / pick_project
+local watch = require("ledger.builder.watch") -- watch modes + per-project sub-steps
+
 local function cfg()
   local ok, c = pcall(function()
     return require("ledger.config").get().builder or {}
@@ -193,20 +196,7 @@ local function refresh_statuses()
     end
   end
   state.nx_seeded = true
-  -- per-project sub-step status + duration (from their in-memory tasks)
-  for _, list in pairs(state.substeps or {}) do
-    for _, sub in ipairs(list) do
-      if tasks.is_running(sub.task_id) then
-        sub.status = "in_progress"
-      else
-        local r = tasks.last_result(sub.task_id)
-        if r then
-          sub.status = (r.code == 0) and "done" or "failed"
-          sub.dur = r.duration
-        end -- else keep the launch-set status until a result lands
-      end
-    end
-  end
+  watch.refresh_substeps(state) -- per-project sub-step status + duration
   sync_focus()
 end
 
@@ -462,55 +452,6 @@ function M.run_step_by_id(id)
   vim.notify("Builder: no '" .. id .. "' step for this platform", vim.log.levels.WARN)
 end
 
--- Record + launch a per-project sub-step under `parent` ("libs" for builds,
--- "install" for scoped installs). `spec` = { template, label, projects?, filter? }.
--- The sub-step shows as a navigable row under its parent (state + duration) and
--- its log is pinned so it's visible.
-local function add_substep(parent, spec)
-  if not state.root or not spec.label or spec.label == "" then
-    return
-  end
-  state.substeps = state.substeps or {}
-  local list = state.substeps[parent] or {}
-  state.substeps[parent] = list
-  local rec, is_new
-  for _, s in ipairs(list) do
-    if s.project == spec.label then
-      rec = s
-      break
-    end
-  end
-  if not rec then
-    rec = { project = spec.label, task_id = "ss:" .. parent .. ":" .. spec.label, template = spec.template }
-    list[#list + 1] = rec
-    is_new = true
-  end
-  rec.run = { projects = spec.projects, filter = spec.filter }
-  rec.status = "in_progress"
-  state.log_id = rec.task_id -- pin the log so the rebuild's output is visible
-  state.bottom = "logs"
-  state.log_offset = 0
-  require("ledger.tasks").run(spec.template, {
-    root = state.root,
-    task_id = rec.task_id,
-    label = spec.label,
-    projects = spec.projects,
-    filter = spec.filter,
-    on_done = function()
-      if state then
-        refresh_statuses()
-        redraw("all")
-      end
-    end,
-  })
-  refresh_statuses()
-  if is_new and state.show_substeps then
-    rebuild() -- a new visible row → re-layout to fit it
-  else
-    redraw("all")
-  end
-end
-
 local function activate()
   if not state.root then
     return
@@ -531,7 +472,7 @@ local function activate()
       end
     elseif it.kind == "substep" then -- Enter re-runs the sub-step
       local run = it.sub.run or {}
-      add_substep(it.parent, {
+      watch.add_substep(it.parent, {
         template = it.sub.template,
         label = it.sub.project,
         projects = run.projects,
@@ -693,63 +634,8 @@ end
 -- cursor, <CR> picks the highlighted line, q/<Esc> closes. Focus returns to the
 -- builder on close. Chosen over vim.ui.select (snacks) which adds an unwanted
 -- search prompt, and over nvzone/menu's keyboard mode (needs per-item keybinds).
-local function open_menu(title, choices, current, on_pick)
-  if not choices or #choices == 0 then
-    return
-  end
-  local buf = vim.api.nvim_create_buf(false, true)
-  local width = vim.fn.strdisplaywidth(title) + 2
-  local cur_line = 1
-  local lines = {}
-  for i, c in ipairs(choices) do
-    local marked = (c == current)
-    lines[i] = (marked and " ● " or "   ") .. c
-    if marked then
-      cur_line = i
-    end
-    width = math.max(width, vim.fn.strdisplaywidth(lines[i]) + 2)
-  end
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-  vim.bo[buf].bufhidden = "wipe"
-
-  local height = math.min(#choices, math.max(1, vim.o.lines - 6))
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    width = math.min(width, vim.o.columns - 4),
-    height = height,
-    row = math.floor((vim.o.lines - height) / 2),
-    col = math.floor((vim.o.columns - width) / 2),
-    style = "minimal",
-    border = "rounded",
-    title = " " .. title .. " ",
-    title_pos = "center",
-    zindex = 250,
-  })
-  vim.wo[win].cursorline = true
-  pcall(vim.api.nvim_win_set_cursor, win, { cur_line, 0 })
-
-  local function close()
-    if vim.api.nvim_win_is_valid(win) then
-      pcall(vim.api.nvim_win_close, win, true)
-    end
-  end
-  local function pick()
-    local row = vim.api.nvim_win_get_cursor(win)[1]
-    close()
-    local choice = choices[row]
-    if choice then
-      on_pick(choice)
-    end
-  end
-  local opts = { buffer = buf, nowait = true, silent = true }
-  vim.keymap.set("n", "<CR>", pick, opts)
-  vim.keymap.set("n", "q", close, opts)
-  vim.keymap.set("n", "<Esc>", close, opts)
-end
-
 local function pick_device()
-  open_menu("Speculos device", DEVICES, state.device, function(d)
+  menus.open_menu("Speculos device", DEVICES, state.device, function(d)
     state.device = d
     vim.env.SPECULOS_DEVICE = d
     refresh_meta()
@@ -763,7 +649,7 @@ local function pick_env()
   if state.platform == "desktop" then
     -- desktop has no detox config: choose the build profile + MOCK
     local choices = { "build: testing", "build: staging", "MOCK: off", "MOCK: on" }
-    open_menu("Desktop env", choices, "build: " .. (state.desktop_build or "testing"), function(c)
+    menus.open_menu("Desktop env", choices, "build: " .. (state.desktop_build or "testing"), function(c)
       local b = c:match("^build:%s*(%S+)")
       if b then
         state.desktop_build = b
@@ -777,7 +663,7 @@ local function pick_env()
     end)
   else
     local choices = state.platform_flag == "android" and ANDROID_CONFIGS or IOS_CONFIGS
-    open_menu("Detox configuration", choices, state.config, function(c)
+    menus.open_menu("Detox configuration", choices, state.config, function(c)
       state.config = c
       refresh_statuses()
       rebuild()
@@ -792,112 +678,6 @@ local function pick_pwdebug()
   end
   state.pwdebug = (state.pwdebug == "1") and "0" or "1"
   redraw("all")
-end
-
--- ── watch + per-project targeting ───────────────────────────────────────────
-
--- Switch the watch mode: "on-save" (Neovim rebuilds the saved file's nx project
--- via the BufWritePost autocmd — daemon-free), "nx" (the nx watch daemon, which
--- needs NX_DAEMON=true here), or "off".
-local function set_watch_mode(mode)
-  if not state.root then
-    return
-  end
-  local tasks = require("ledger.tasks")
-  if mode == "nx" then
-    if not tasks.is_running("shared.nx.watch") then
-      tasks.run("shared.nx.watch", { root = state.root })
-    end
-  elseif tasks.is_running("shared.nx.watch") then
-    tasks.stop("shared.nx.watch") -- leaving nx mode → stop the daemon
-  end
-  state.watch_mode = mode
-  state.watching = mode ~= "off"
-  redraw("all")
-end
-
-local function watch_menu()
-  if not state.root then
-    return
-  end
-  local cur = state.watch_mode == "nx" and "nx watch (daemon)" or state.watch_mode
-  open_menu("Watch", { "on-save", "nx watch (daemon)", "off" }, cur, function(c)
-    set_watch_mode(c:find("^nx") and "nx" or (c == "off" and "off" or "on-save"))
-  end)
-end
-
--- On-save incremental rebuild: rebuild just the nx project owning the saved
--- file. Debounced per project (reuses the prefetch.lua tick pattern).
-local _watch_ticks = {}
-local function on_save_rebuild(abspath)
-  if not (state and state.root and state.watch_mode == "on-save") then
-    return
-  end
-  local proj = require("ledger.builder.nx").buildable_project_for_file(state.root, abspath)
-  if not proj then
-    return
-  end
-  _watch_ticks[proj] = (_watch_ticks[proj] or 0) + 1
-  local tick = _watch_ticks[proj]
-  vim.defer_fn(function()
-    if _watch_ticks[proj] ~= tick or not (state and state.root and state.watch_mode == "on-save") then
-      return
-    end
-    add_substep("libs", { template = "shared.nx.build", label = proj, projects = { proj } })
-  end, 400)
-end
-
--- Pick one nx project via vim.ui.select (routes to the user's Telescope UI).
-local function nx_pick_project(prompt, cb)
-  local projects = require("ledger.builder.nx").projects(state.root)
-  if #projects == 0 then
-    vim.notify("Builder: no nx project graph yet — build once, then retry", vim.log.levels.WARN)
-    return
-  end
-  local names = {}
-  for _, p in ipairs(projects) do
-    names[#names + 1] = p.name
-  end
-  table.sort(names)
-  vim.ui.select(names, { prompt = prompt }, function(choice)
-    if choice and choice ~= "" then
-      cb(choice)
-    end
-  end)
-end
-
--- Build a specific nx project (current file's / picked / by filter). Runs through
--- the Builder as a sub-step under `libs`, so status + logs update like any step.
-local function target_menu()
-  if not state.root then
-    return
-  end
-  local items = {
-    "Build current file's project",
-    "Build project…",
-    "Build by filter…",
-  }
-  open_menu("Build a project", items, nil, function(c)
-    if c == "Build current file's project" then
-      local f = vim.fn.expand("#:p") -- the file edited before the Builder took focus
-      local proj = f ~= "" and require("ledger.builder.nx").project_for_file(state.root, f) or nil
-      if not proj then
-        vim.notify("Builder: the previous buffer isn't inside an nx project", vim.log.levels.WARN)
-        return
-      end
-      add_substep("libs", { template = "shared.nx.build", label = proj, projects = { proj } })
-    elseif c == "Build project…" then
-      nx_pick_project("Build nx project:", function(p)
-        add_substep("libs", { template = "shared.nx.build", label = p, projects = { p } })
-      end)
-    elseif c == "Build by filter…" then
-      vim.ui.input({ prompt = "Build -p filter: " }, function(f)
-        if f and f ~= "" then
-          add_substep("libs", { template = "shared.nx.build", label = f, filter = f })
-        end
-      end)
-    end
-  end)
 end
 
 -- ── run-a-test flow (All / Pick file / By name|ticket, with discovery) ───────
@@ -923,6 +703,10 @@ local function do_run_test(scope_opts)
     opts.config = state.config
     opts.platform_flag = state.platform_flag
   end
+  -- show this test's log: pin it + switch to the Logs view, so its output is
+  -- visible during/after the run regardless of focus or a prior build's pin.
+  state.log_id = id
+  state.bottom = "logs"
   state.log_offset = 0
   tasks.run(id, opts)
   vim.defer_fn(function()
@@ -1029,17 +813,22 @@ function M.run_test()
   if not state.root then
     return
   end
-  open_menu("Run tests", { "All tests", "Pick spec file…", "By test name…", "By ticket…" }, nil, function(choice)
-    if choice == "All tests" then
-      do_run_test({ scope = "all" })
-    elseif choice == "Pick spec file…" then
-      pick_spec_file()
-    elseif choice == "By test name…" then
-      pick_test_name()
-    else
-      pick_ticket()
+  menus.open_menu(
+    "Run tests",
+    { "All tests", "Pick spec file…", "By test name…", "By ticket…" },
+    nil,
+    function(choice)
+      if choice == "All tests" then
+        do_run_test({ scope = "all" })
+      elseif choice == "Pick spec file…" then
+        pick_spec_file()
+      elseif choice == "By test name…" then
+        pick_test_name()
+      else
+        pick_ticket()
+      end
     end
-  end)
+  )
 end
 
 -- ── fix / maintenance menu ────────────────────────────────────────────────────
@@ -1059,7 +848,7 @@ local function fix_menu()
     labels[#labels + 1] = it.label
     by_label[it.label] = it.id
   end
-  open_menu("Fix / maintenance", labels, nil, function(choice)
+  menus.open_menu("Fix / maintenance", labels, nil, function(choice)
     local id = by_label[choice]
     if id then
       require("ledger.tasks").run(id, { root = state.root })
@@ -1203,7 +992,7 @@ local function run_all_menu()
     return
   end
   local target = state.platform == "desktop" and "desktop" or state.platform_flag
-  open_menu("run all (" .. target .. ")", { "Run all", "Clean + reinstall + run all" }, "Run all", function(c)
+  menus.open_menu("run all (" .. target .. ")", { "Run all", "Clean + reinstall + run all" }, "Run all", function(c)
     run_all(c == "Clean + reinstall + run all" and "clean" or "build")
   end)
 end
@@ -1239,20 +1028,9 @@ local function set_keymaps()
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true })
   end
   -- scroll the Logs content only (offset 0 = newest); no-op unless Logs is shown
-  -- The log id currently shown: a pinned ad-hoc/watch log (state.log_id), else
-  -- the focused pipeline item's task (step or sub-step), else the last started.
+  -- The log id currently shown (shared rule lives in panes.current_log_id).
   local function current_log_id()
-    if state.log_id then
-      return state.log_id
-    end
-    local tasks = require("ledger.tasks")
-    if state.focus and state.focus.col == "pipeline" then
-      local it = require("ledger.builder.ui.panes").pipeline_items(state)[state.focus_idx]
-      if it then
-        return (it.step and it.step.template) or (it.sub and it.sub.task_id) or tasks.last_started
-      end
-    end
-    return tasks.last_started
+    return require("ledger.builder.ui.panes").current_log_id(state)
   end
   local function scroll(delta)
     if state.bottom ~= "logs" then
@@ -1378,8 +1156,8 @@ local function set_keymaps()
     M.run_step_by_id("build")
   end)
   -- tests run from the navigable "Run tests" pipeline row (j to it, then <CR>)
-  map("w", watch_menu)
-  map("t", target_menu)
+  map("w", watch.menu)
+  map("t", watch.target_menu)
   map("z", function() -- fold / unfold the per-project sub-steps
     state.show_substeps = not state.show_substeps
     rebuild()
@@ -1532,7 +1310,17 @@ local function build()
 
   install_callbacks()
   state.on_runtests = run_tests_gated -- the Run-tests button + r
-  state.on_watch = watch_menu -- the header watch chip + w
+  state.on_watch = watch.menu -- the header watch chip + w
+  watch.setup({
+    get_state = function()
+      return state
+    end,
+    refresh = refresh_statuses,
+    redraw = redraw,
+    rebuild = rebuild,
+    open_menu = menus.open_menu,
+    pick_project = menus.pick_project,
+  })
   -- on-save incremental rebuild (fires only while watch_mode == "on-save")
   vim.api.nvim_create_autocmd("BufWritePost", {
     group = vim.api.nvim_create_augroup("ledger_builder_watch", { clear = true }),
@@ -1542,13 +1330,13 @@ local function build()
       end
       local f = vim.api.nvim_buf_get_name(args.buf)
       if f ~= "" then
-        on_save_rebuild(f)
+        watch.on_save(f)
       end
     end,
   })
   mount()
   if state.watch_mode == "nx" then
-    set_watch_mode("nx") -- defaulted to the nx daemon → start it
+    watch.set_mode("nx") -- defaulted to the nx daemon → start it
   end
 end
 
