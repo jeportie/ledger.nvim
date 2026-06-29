@@ -493,6 +493,37 @@ describe("ledger.builder.ui.panes", function()
     assert.is_truthy(s:find("sub-step log line", 1, true))
   end)
 
+  -- regression: the Run-tests row has no step/sub, so current_log_id must fall
+  -- through to last_started (a focused row with no log id must not return nil)
+  it("current_log_id falls through to last_started on the Run-tests row", function()
+    require("ledger.tasks").last_started = "desktop.pw.run"
+    local steps = require("ledger.builder.pipeline").steps("desktop")
+    local st = vim.tbl_extend("force", {}, fake, {
+      platform = "desktop",
+      steps = steps,
+      show_substeps = false,
+      focus = { col = "pipeline", idx = #steps + 1 }, -- the Run-tests row (last item)
+    })
+    assert.equals("desktop.pw.run", panes.current_log_id(st))
+  end)
+
+  it("Logs panel shows the running test's log when the Run-tests row is focused", function()
+    local tasks = require("ledger.tasks")
+    tasks.inject("desktop.pw.run", { "Running 3 tests", "✓ all passed" }, 0)
+    tasks.last_started = "desktop.pw.run"
+    local steps = require("ledger.builder.pipeline").steps("desktop")
+    local st = vim.tbl_extend("force", {}, fake, {
+      platform = "desktop",
+      steps = steps,
+      show_substeps = false,
+      bottom = "logs",
+      focus = { col = "pipeline", idx = #steps + 1 },
+    })
+    local s = flat(panes.logs_content(st, 10, 60))
+    assert.is_truthy(s:find("Running 3 tests", 1, true)) -- the test log shows
+    assert.is_nil(s:find("no output yet", 1, true)) -- not the empty placeholder
+  end)
+
   it("pipeline cells are left-aligned with uniform widths across targets", function()
     local ui = require("volt.ui")
     local function rowwidths(p, f)

@@ -703,6 +703,10 @@ local function do_run_test(scope_opts)
     opts.config = state.config
     opts.platform_flag = state.platform_flag
   end
+  -- show this test's log: pin it + switch to the Logs view, so its output is
+  -- visible during/after the run regardless of focus or a prior build's pin.
+  state.log_id = id
+  state.bottom = "logs"
   state.log_offset = 0
   tasks.run(id, opts)
   vim.defer_fn(function()

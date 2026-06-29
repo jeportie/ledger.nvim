@@ -595,7 +595,12 @@ function M.current_log_id(st)
   if st.focus and st.focus.col == "pipeline" then
     local it = M.pipeline_items(st)[st.focus.idx]
     if it then
-      return (it.step and it.step.template) or (it.sub and it.sub.task_id) or nil
+      -- a focused item with a task shows its log; one without (the Run-tests
+      -- row) falls through to last_started below — do NOT return nil here.
+      local id = (it.step and it.step.template) or (it.sub and it.sub.task_id)
+      if id then
+        return id
+      end
     end
   end
   return require("ledger.tasks").last_started
