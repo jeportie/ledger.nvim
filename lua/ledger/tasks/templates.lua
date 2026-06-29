@@ -78,18 +78,24 @@ local function pw_run_cmd(opts)
 end
 
 -- Guided iOS-simulator setup — resolves xcodebuild "Found no destinations for the
--- scheme" by ensuring a booted simulator named "iOS Simulator" (the device name
--- detox targets). If no iOS runtime is installed it prints the install command
--- and stops, rather than auto-triggering the multi-GB `-downloadPlatform` fetch.
+-- scheme". xcodebuild builds against the iphonesimulator SDK (e.g. iOS 26.5), so a
+-- simulator runtime of that EXACT version must exist; an older runtime (e.g. 26.4)
+-- is ineligible. If the matching runtime is missing we print the one-time multi-GB
+-- install command and stop; otherwise we create + boot a simulator named
+-- "iOS Simulator" (the device name detox targets) on that runtime.
 local IOS_SIM_FIX = [[
 set -e
-if ! xcrun simctl list runtimes 2>/dev/null | grep -q "iOS "; then
-  echo "No iOS simulator runtime installed."
-  echo "Install one, then re-run this fix:"
+SDK=$(xcodebuild -showsdks 2>/dev/null | grep -oE "iphonesimulator[0-9.]+" | head -1 | sed 's/iphonesimulator//')
+if [ -n "$SDK" ] && ! xcrun simctl list runtimes 2>/dev/null | grep -q "iOS $SDK "; then
+  echo "xcodebuild builds against the iOS $SDK simulator SDK, but no iOS $SDK runtime is installed."
+  echo "(An older runtime is ineligible — the simulator version must match the SDK.)"
+  echo "Install it (one-time, multi-GB), then re-run the build:"
   echo "    xcodebuild -downloadPlatform iOS"
+  echo "  or: Xcode > Settings > Components > iOS $SDK Simulator"
   exit 1
 fi
-RT=$(xcrun simctl list runtimes | grep "iOS " | grep -oE "com.apple.CoreSimulator.SimRuntime.iOS[^ ]*" | tail -1)
+RT=$(xcrun simctl list runtimes | grep "iOS $SDK " | grep -oE "com.apple.CoreSimulator.SimRuntime.iOS[^ ]*" | tail -1)
+[ -z "$RT" ] && RT=$(xcrun simctl list runtimes | grep "iOS " | grep -oE "com.apple.CoreSimulator.SimRuntime.iOS[^ ]*" | tail -1)
 DT=$(xcrun simctl list devicetypes | grep -oE "com.apple.CoreSimulator.SimDeviceType.iPhone[^ )]*" | tail -1)
 if ! xcrun simctl list devices | grep -q "iOS Simulator ("; then
   echo "Creating simulator 'iOS Simulator' ($DT on $RT)"
@@ -97,7 +103,7 @@ if ! xcrun simctl list devices | grep -q "iOS Simulator ("; then
 fi
 xcrun simctl boot "iOS Simulator" 2>/dev/null || true
 open -a Simulator || true
-echo "iOS Simulator ready."
+echo "iOS Simulator ready (runtime $RT)."
 ]]
 
 -- The matrix. Order is roughly pipeline order per platform.
