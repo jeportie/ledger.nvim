@@ -135,6 +135,10 @@ describe("ledger.tasks.templates", function()
       assert.equals("pnpm clean", templates.resolve("shared.clean", {}, ROOT).cmd)
       assert.equals("rm -rf node_modules && pnpm store prune && pnpm i", templates.resolve("fix.global", {}, ROOT).cmd)
       assert.is_truthy(templates.resolve("fix.ios_pod", {}, ROOT).cmd:find("pnpm mobile pod", 1, true))
+      local sim = templates.resolve("fix.ios_sim", {}, ROOT).cmd
+      assert.is_truthy(sim:find("simctl", 1, true)) -- creates/boots via simctl
+      assert.is_truthy(sim:find('"iOS Simulator"', 1, true)) -- detox's device name
+      assert.is_truthy(sim:find("xcodebuild -downloadPlatform iOS", 1, true)) -- install hint
     end)
 
     it("lib watch defaults and overrides the package", function()

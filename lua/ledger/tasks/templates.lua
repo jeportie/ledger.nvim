@@ -77,6 +77,29 @@ local function pw_run_cmd(opts)
   return prefix .. base
 end
 
+-- Guided iOS-simulator setup — resolves xcodebuild "Found no destinations for the
+-- scheme" by ensuring a booted simulator named "iOS Simulator" (the device name
+-- detox targets). If no iOS runtime is installed it prints the install command
+-- and stops, rather than auto-triggering the multi-GB `-downloadPlatform` fetch.
+local IOS_SIM_FIX = [[
+set -e
+if ! xcrun simctl list runtimes 2>/dev/null | grep -q "iOS "; then
+  echo "No iOS simulator runtime installed."
+  echo "Install one, then re-run this fix:"
+  echo "    xcodebuild -downloadPlatform iOS"
+  exit 1
+fi
+RT=$(xcrun simctl list runtimes | grep "iOS " | grep -oE "com.apple.CoreSimulator.SimRuntime.iOS[^ ]*" | tail -1)
+DT=$(xcrun simctl list devicetypes | grep -oE "com.apple.CoreSimulator.SimDeviceType.iPhone[^ )]*" | tail -1)
+if ! xcrun simctl list devices | grep -q "iOS Simulator ("; then
+  echo "Creating simulator 'iOS Simulator' ($DT on $RT)"
+  xcrun simctl create "iOS Simulator" "$DT" "$RT"
+fi
+xcrun simctl boot "iOS Simulator" 2>/dev/null || true
+open -a Simulator || true
+echo "iOS Simulator ready."
+]]
+
 -- The matrix. Order is roughly pipeline order per platform.
 M.templates = {
   -- ── desktop ──────────────────────────────────────────────────────────────
@@ -235,6 +258,22 @@ M.templates = {
     cmd = detox_test_cmd,
   },
   {
+    id = "mobile.run.ios",
+    label = "Mobile · run app (iOS sim)",
+    platform = "mobile",
+    kind = "run",
+    cwd = "repo",
+    cmd = "pnpm mobile ios",
+  },
+  {
+    id = "mobile.run.android",
+    label = "Mobile · run app (Android emu)",
+    platform = "mobile",
+    kind = "run",
+    cwd = "repo",
+    cmd = "pnpm mobile android",
+  },
+  {
     id = "mobile.e2e.ci",
     label = "Mobile · e2e:ci orchestrator",
     platform = "mobile",
@@ -257,22 +296,6 @@ M.templates = {
 
   -- ── shared / utility ───────────────────────────────────────────────────────
   {
-  {
-    id = "mobile.run.ios",
-    label = "Mobile · run app (iOS sim)",
-    platform = "mobile",
-    kind = "run",
-    cwd = "repo",
-    cmd = "pnpm mobile ios",
-  },
-  {
-    id = "mobile.run.android",
-    label = "Mobile · run app (Android emu)",
-    platform = "mobile",
-    kind = "run",
-    cwd = "repo",
-    cmd = "pnpm mobile android",
-  },
     id = "shared.lib.watch",
     label = "Lib · watch",
     platform = "shared",
@@ -350,6 +373,14 @@ M.templates = {
     kind = "fix",
     cwd = "repo",
     cmd = "cd apps/ledger-live-mobile/ios && rm -rf Pods Podfile.lock && cd ../../.. && pnpm mobile pod",
+  },
+  {
+    id = "fix.ios_sim",
+    label = "Fix · iOS simulator (create + boot 'iOS Simulator')",
+    platform = "mobile",
+    kind = "fix",
+    cwd = "repo",
+    cmd = IOS_SIM_FIX,
   },
 }
 

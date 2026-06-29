@@ -859,6 +859,7 @@ local function fix_menu()
   end
   if state.platform == "mobile" and state.platform_flag == "ios" then
     items[#items + 1] = { label = "iOS pod fix (reset Pods)", id = "fix.ios_pod" }
+    items[#items + 1] = { label = "iOS simulator fix (create + boot)", id = "fix.ios_sim" }
   end
   items[#items + 1] = { label = "Clean (git clean -fdX)", id = "shared.clean" }
   local labels = {}
@@ -1174,10 +1175,10 @@ local function set_keymaps()
   map("B", function()
     M.run_step_by_id("build")
   end)
-  -- tests run from the navigable "Run tests" pipeline row (j to it, then <CR>)
   map("o", function()
     M.run_app()
   end)
+  -- tests run from the navigable "Run tests" pipeline row (j to it, then <CR>)
   map("w", watch.menu)
   map("t", watch.target_menu)
   map("z", function() -- fold / unfold the per-project sub-steps
