@@ -23,11 +23,12 @@ function M.resolve_cwd(sym, root)
   return map[sym or "repo"] or root
 end
 
--- Build command for a detox configuration. iOS configs need pods first.
+-- Build command for a detox configuration. Pods are installed by the dedicated
+-- `mobile.pod` pipeline step (and run_all orders it before the build), so the
+-- build no longer reinstalls them on every run.
 local function detox_build_cmd(opts)
   local cfg = opts.config or "ios.sim.debug"
-  local prefix = cfg:match("^ios") and "pnpm mobile pod && " or ""
-  return prefix .. "pnpm mobile e2e:build -c " .. cfg
+  return "pnpm mobile e2e:build -c " .. cfg
 end
 
 -- Map a detox configuration to its e2e:mobile script (iOS debug needs Metro;

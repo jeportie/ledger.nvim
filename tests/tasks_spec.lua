@@ -58,11 +58,10 @@ describe("ledger.tasks.templates", function()
   end)
 
   describe("parametric commands", function()
-    it("detox build prefixes pod for iOS only", function()
-      assert.equals(
-        "pnpm mobile pod && pnpm mobile e2e:build -c ios.sim.debug",
-        templates.resolve("mobile.detox.build", { config = "ios.sim.debug" }, ROOT).cmd
-      )
+    it("detox build no longer prefixes pod (mobile.pod is its own step)", function()
+      local ios = templates.resolve("mobile.detox.build", { config = "ios.sim.debug" }, ROOT).cmd
+      assert.equals("pnpm mobile e2e:build -c ios.sim.debug", ios)
+      assert.is_nil(ios:find("pnpm mobile pod", 1, true))
       assert.equals(
         "pnpm mobile e2e:build -c android.emu.release",
         templates.resolve("mobile.detox.build", { config = "android.emu.release" }, ROOT).cmd
