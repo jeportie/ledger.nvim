@@ -798,6 +798,7 @@ function M.help_shortcuts()
     row("t", "build a project", "current file / picked / filter"),
     row("z", "fold sub-steps", "show / hide per-project rebuilds"),
     row("B", "build", "→ desktop build:* / detox e2e:build"),
+    row("o", "run the app (no tests)", "desktop dev:lld · mobile sim/emu"),
     row("x / s", "kill / start focused process"),
     row("e", "env dropdown", "desktop: build/MOCK · mobile: detox config"),
     row("p", "toggle PWDEBUG (desktop)"),

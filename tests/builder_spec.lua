@@ -793,3 +793,12 @@ describe("ledger.builder.ui.hl + loader", function()
     end)
   end)
 end)
+
+describe("ledger.builder run-app dispatch", function()
+  local builder = require("ledger.builder")
+  it("maps platform/flag to the run-app template", function()
+    assert.equals("desktop.dev", builder.run_app_id("desktop")) -- reuses dev:lld
+    assert.equals("mobile.run.ios", builder.run_app_id("mobile", "ios"))
+    assert.equals("mobile.run.android", builder.run_app_id("mobile", "android"))
+  end)
+end)

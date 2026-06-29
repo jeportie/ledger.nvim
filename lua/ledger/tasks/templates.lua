@@ -257,6 +257,22 @@ M.templates = {
 
   -- ── shared / utility ───────────────────────────────────────────────────────
   {
+  {
+    id = "mobile.run.ios",
+    label = "Mobile · run app (iOS sim)",
+    platform = "mobile",
+    kind = "run",
+    cwd = "repo",
+    cmd = "pnpm mobile ios",
+  },
+  {
+    id = "mobile.run.android",
+    label = "Mobile · run app (Android emu)",
+    platform = "mobile",
+    kind = "run",
+    cwd = "repo",
+    cmd = "pnpm mobile android",
+  },
     id = "shared.lib.watch",
     label = "Lib · watch",
     platform = "shared",

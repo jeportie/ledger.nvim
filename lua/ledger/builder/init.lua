@@ -452,6 +452,25 @@ function M.run_step_by_id(id)
   vim.notify("Builder: no '" .. id .. "' step for this platform", vim.log.levels.WARN)
 end
 
+-- Which template runs "the app" (no tests) for a platform/flag. Desktop reuses the
+-- dev:lld server (the Electron dev app); mobile runs the native app on a sim/emu.
+function M.run_app_id(platform, flag)
+  if platform == "desktop" then
+    return "desktop.dev"
+  elseif flag == "android" then
+    return "mobile.run.android"
+  end
+  return "mobile.run.ios"
+end
+
+-- Run the native app for the active platform, without tests.
+function M.run_app()
+  if not state.root then
+    return
+  end
+  M.run_template(M.run_app_id(state.platform, state.platform_flag))
+end
+
 local function activate()
   if not state.root then
     return
@@ -1156,6 +1175,9 @@ local function set_keymaps()
     M.run_step_by_id("build")
   end)
   -- tests run from the navigable "Run tests" pipeline row (j to it, then <CR>)
+  map("o", function()
+    M.run_app()
+  end)
   map("w", watch.menu)
   map("t", watch.target_menu)
   map("z", function() -- fold / unfold the per-project sub-steps

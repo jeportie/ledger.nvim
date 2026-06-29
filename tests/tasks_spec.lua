@@ -68,6 +68,11 @@ describe("ledger.tasks.templates", function()
       )
     end)
 
+    it("run-app templates launch the native app without tests", function()
+      assert.equals("pnpm mobile ios", templates.resolve("mobile.run.ios", {}, ROOT).cmd)
+      assert.equals("pnpm mobile android", templates.resolve("mobile.run.android", {}, ROOT).cmd)
+    end)
+
     it("detox test maps configs to scripts and applies scope", function()
       assert.equals(
         "pnpm e2e:mobile test:ios:debug",
