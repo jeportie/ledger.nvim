@@ -513,6 +513,19 @@ describe("ledger.builder.ui.panes", function()
     assert.is_nil(panes.current_log_id(st)) -- speculos has no start template
   end)
 
+  -- a task-tracked card (the detox bridge) shows the log of the task it lives in
+  it("current_log_id maps a focused task-based process to its task log", function()
+    local proc = require("ledger.builder.proc")
+    proc.by_name._test_bridge = { name = "_test_bridge", task = "mobile.detox.test" }
+    local st = vim.tbl_extend("force", {}, fake, {
+      procs = { { name = "_test_bridge", alive = true } },
+      focus = { col = "processes", idx = 1 },
+    })
+    local id = panes.current_log_id(st)
+    proc.by_name._test_bridge = nil -- cleanup the injected registry entry
+    assert.equals("mobile.detox.test", id)
+  end)
+
   -- the Run-tests row shows the TEST task's log, not last_started (which could be
   -- Metro or a build that ran afterwards)
   it("current_log_id maps the Run-tests row to the test task, not last_started", function()

@@ -607,12 +607,15 @@ end
 -- The task id whose log the panel shows: a focused process's own log, else a pinned
 -- ad-hoc/watch log (st.log_id), else the focused pipeline item's task, else last started.
 function M.current_log_id(st)
-  -- a focused process shows ITS OWN task log (metro → "mobile.metro"); a process
-  -- with no managed task shows nothing (never bleed another task's log).
+  -- a focused process shows ITS OWN log: a start template's output (metro →
+  -- "mobile.metro"; speculos/sim → their log stream) or, for a task-tracked card
+  -- like the detox bridge, the managed task it lives in (mobile.detox.test, whose
+  -- output carries the [E2E Bridge Server] lines). A process with neither shows
+  -- nothing (never bleed another task's log).
   if st.focus and st.focus.col == "processes" then
     local p = (st.procs or {})[st.focus.idx]
     local e = p and require("ledger.builder.proc").by_name[p.name]
-    return e and e.start or nil
+    return e and (e.start or e.task) or nil
   end
   if st.log_id then
     return st.log_id
