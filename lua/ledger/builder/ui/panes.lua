@@ -269,7 +269,9 @@ function M.pipeline_content(st, inner_w)
   local cfg = require("ledger.config").get().builder or {}
   local step_spinner = (cfg.spinner and cfg.spinner.step) or "star"
   local steps = st.steps or {}
-  local durs = require("ledger.builder.store").get(st.root) -- persisted per-template durations
+  -- per-template durations are snapshotted into state during refresh_statuses
+  -- (off the redraw path); the store stays the cross-session source of truth.
+  local durs = st.durations or {}
 
   -- progress counts only required steps (clean is optional → not a build gate)
   local done, total = 0, 0
@@ -332,7 +334,9 @@ function M.pipeline_content(st, inner_w)
   local rt_g, rt_word, rt_hl = "●", "ready", "LedgerStateDone"
   if tstate ~= "ready" then
     rt_g, rt_word, rt_hl = "○", "locked", "LedgerStatePending"
-  elseif st.platform == "desktop" and not M.pw_installed() then
+  elseif st.platform == "desktop" and st.pw_installed == false then
+    -- pw_installed is probed once and cached on state (nil = not yet probed →
+    -- treat as installed so we don't flash "setup pw" before the first probe).
     rt_g, rt_word, rt_hl = "⚠", "setup pw", "LedgerStateStale"
   end
   local rt_dur = durs[st.platform == "desktop" and "desktop.pw.run" or "mobile.detox.test"]

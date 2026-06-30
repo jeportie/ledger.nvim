@@ -9,6 +9,14 @@
 -- are built by pure functions (`detect_cmd`, `stop_cmd`) so they can be unit
 -- tested, and `is_alive` / `status` take an injectable `runner` for the same
 -- reason. The default runner uses `vim.system` (Neovim 0.10+).
+--
+-- Two runner shapes coexist:
+--   * synchronous `runner(cmd) -> { code, stdout }` — used by `is_alive` /
+--     `status` / `status_all` / `for_platform` and by the unit tests.
+--   * asynchronous `runner(cmd, cb)` where `cb` receives `{ code, stdout }` —
+--     used by `for_platform_async` so the Builder can probe liveness without
+--     blocking the UI thread on `vim.system():wait()`.
+-- The async path is purely additive; the synchronous contract is unchanged.
 
 local M = {}
 
@@ -105,6 +113,15 @@ local function default_runner(cmd)
   return { code = res.code or 1, stdout = res.stdout or "" }
 end
 
+-- Default async runner: runs `cmd` without blocking and invokes `cb` with
+-- { code, stdout } when it exits. `vim.system`'s callback fires off the main
+-- loop, so callers that touch buffers from `cb` must `vim.schedule`.
+local function default_async_runner(cmd, cb)
+  vim.system({ "sh", "-c", cmd }, { text = true }, function(res)
+    cb({ code = res.code or 1, stdout = res.stdout or "" })
+  end)
+end
+
 local function trim(s)
   return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
@@ -192,6 +209,84 @@ function M.for_platform(platform, flag, runner)
     end
   end
   return out
+end
+
+-- ── async liveness (non-blocking) ────────────────────────────────────────────
+-- Same status shape as the sync path, but a single probe per process resolved
+-- via `vim.system(cmd, cb)` so the UI thread never blocks on `:wait()`.
+
+-- Pure: turn a detect-command result into a status, given the entry. Derives
+-- `alive` (+ docker `count`) from ONE command result (no second probe).
+local function status_from_result(e, r)
+  local st = { name = e.name, label = e.label, port = e.port }
+  if e.probe then
+    st.alive = r.code == 0
+  elseif e.docker then
+    local n = 0
+    for _ in (r.stdout or ""):gmatch("[^\r\n]+") do
+      n = n + 1
+    end
+    st.count = n
+    st.alive = n > 0
+  else -- port (or any non-shell entry): alive when stdout is non-empty
+    st.alive = trim(r.stdout or "") ~= ""
+  end
+  return st
+end
+
+-- Async status of one process. `cb(status)` always fires exactly once. Entries
+-- with no shell probe (managed-only, e.g. dev_lld) resolve to alive=false
+-- without a probe, mirroring `status`/`is_alive`.
+function M.status_async(name, async_runner, cb)
+  async_runner = async_runner or default_async_runner
+  local e = M.by_name[name]
+  if not e then
+    return cb(nil)
+  end
+  local cmd = M.detect_cmd(name)
+  if not cmd then
+    local st = { name = e.name, label = e.label, alive = false, port = e.port }
+    if e.docker then
+      st.count = 0
+    end
+    return cb(st)
+  end
+  async_runner(cmd, function(r)
+    cb(status_from_result(e, r or { code = 1, stdout = "" }))
+  end)
+end
+
+-- Async status of the processes relevant to a platform/flag, IN ORDER. Fans the
+-- probes out concurrently and invokes `cb(list)` once every probe has returned.
+-- `async_runner(cmd, cb)` is injectable (tests pass one that calls back
+-- synchronously). With no relevant processes, `cb({})` fires on the next tick.
+function M.for_platform_async(platform, flag, cb, async_runner)
+  local names = M.names_for(platform, flag)
+  local total = #names
+  local results, remaining = {}, total
+  if total == 0 then
+    return vim.schedule(function()
+      cb({})
+    end)
+  end
+  local function done()
+    remaining = remaining - 1
+    if remaining == 0 then
+      local out = {}
+      for i = 1, total do
+        if results[i] then
+          out[#out + 1] = results[i]
+        end
+      end
+      cb(out)
+    end
+  end
+  for i, name in ipairs(names) do
+    M.status_async(name, async_runner, function(st)
+      results[i] = st
+      done()
+    end)
+  end
 end
 
 -- Stop a process (executes side effects). Returns true if a stop command ran.

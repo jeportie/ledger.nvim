@@ -600,12 +600,17 @@ describe("ledger.builder.ui.panes", function()
     assert.equals(" Ledger Builder ", seg) -- a small plaque, not a full-width bar
   end)
 
-  it("pipeline Dur reads from the persisted store", function()
-    local store = require("ledger.builder.store")
-    store._reset()
-    store.record(fake.root, fake.steps[1].template, 0, 123) -- fmt_dur(123) = 2m03
-    assert.is_truthy(flat(panes.pipeline_content(fake, 80)):find("2m03", 1, true))
-    store._reset()
+  it("pipeline Dur reads per-template durations from state (off the redraw path)", function()
+    -- refresh_statuses snapshots store durations into state.durations; the pane
+    -- reads from there (no disk store.get on every render).
+    local st = vim.tbl_extend("force", {}, fake, {
+      durations = { [fake.steps[1].template] = { code = 0, duration = 123 } }, -- fmt_dur(123) = 2m03
+    })
+    assert.is_truthy(flat(panes.pipeline_content(st, 80)):find("2m03", 1, true))
+    -- with no snapshot the column degrades to "-" rather than reading disk
+    local bare = vim.tbl_extend("force", {}, fake, { durations = nil })
+    local s = flat(panes.pipeline_content(bare, 80))
+    assert.is_truthy(s:find("-", 1, true))
   end)
 
   it("the running step's bullet animates with the tick", function()

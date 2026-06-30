@@ -24,6 +24,11 @@ local ANDROID_CONFIGS = { "android.emu.release", "android.emu.prerelease" }
 
 local state = nil
 
+-- Forward declaration: `redraw` is defined further down (it needs the layout
+-- helpers) but the async-probe callbacks in refresh_statuses / refresh_runtime,
+-- which sit above it, need to call it.
+local redraw
+
 local menus = require("ledger.builder.menus") -- open_menu / pick_project
 local watch = require("ledger.builder.watch") -- watch modes + per-project sub-steps
 
@@ -96,14 +101,26 @@ local function refresh_statuses()
   local detox = require("ledger.detox")
   local nx = require("ledger.builder.nx")
   local persisted = require("ledger.builder.store").get(state.root) -- cross-session results
+  -- Snapshot per-template durations into state so the pipeline pane reads them
+  -- from memory (no disk store.get on every redraw); store stays authoritative.
+  state.durations = persisted
 
   state.steps = pipeline.steps(state.platform, {
     platform_flag = state.platform_flag,
     config = state.config,
     desktop_build = state.desktop_build,
   })
-  state.procs = proc.for_platform(state.platform, state.platform_flag)
+  -- Process liveness is probed ASYNCHRONOUSLY (below) so the UI thread never
+  -- blocks on lsof/docker/xcrun. Seed `alive` from the previous probe so the
+  -- synchronous status pass is never blank; the async callback then refines
+  -- proc-gated steps + state.procs and redraws.
+  state.procs = state.procs or {}
   state.watching = (state.watch_mode == "on-save") or (state.watch_mode == "nx" and tasks.is_running("shared.nx.watch"))
+  -- Probe whether the Playwright browser is installed once per refresh (a
+  -- filesystem scan), cached on state so the redraw path reads a boolean.
+  if state.platform == "desktop" then
+    state.pw_installed = require("ledger.builder.ui.panes").pw_installed()
+  end
   local alive = {}
   for _, p in ipairs(state.procs) do
     alive[p.name] = p.alive
@@ -198,6 +215,37 @@ local function refresh_statuses()
   state.nx_seeded = true
   watch.refresh_substeps(state) -- per-project sub-step status + duration
   sync_focus()
+
+  -- Async liveness: probe the platform's processes without blocking, then write
+  -- state.procs, refresh proc-gated step statuses (e.g. metro → "done" when the
+  -- port is up) and redraw. Guard against a platform switch landing first.
+  local want_platform, want_flag = state.platform, state.platform_flag
+  proc.for_platform_async(state.platform, state.platform_flag, function(procs)
+    -- vim.system fires its callback in a fast event context (no Neovim API), so
+    -- defer the state write + redraw onto the main loop.
+    vim.schedule(function()
+      if not state or state.platform ~= want_platform or state.platform_flag ~= want_flag then
+        return
+      end
+      state.procs = procs
+      local live = {}
+      for _, p in ipairs(procs) do
+        live[p.name] = p.alive
+      end
+      for _, step in ipairs(state.steps or {}) do
+        if step.proc and state.statuses[step.id] ~= "in_progress" then
+          local res = persisted[step.template]
+          if res and res.code and res.code ~= 0 then
+            state.statuses[step.id] = "failed"
+          else
+            state.statuses[step.id] = live[step.proc] and "done" or "missing"
+          end
+        end
+      end
+      sync_focus()
+      redraw("body")
+    end)
+  end)
 end
 
 local function refresh_runtime()
@@ -206,7 +254,21 @@ local function refresh_runtime()
   end
   local proc = require("ledger.builder.proc")
   local tasks = require("ledger.tasks")
-  state.procs = proc.for_platform(state.platform, state.platform_flag)
+  -- Liveness probe is async (no blocking lsof/docker/xcrun on the timer tick):
+  -- update state.procs + repaint when it returns. Guard a platform switch.
+  local want_platform, want_flag = state.platform, state.platform_flag
+  proc.for_platform_async(state.platform, state.platform_flag, function(procs)
+    -- callback runs in a fast event context → defer the API touch.
+    vim.schedule(function()
+      if not state or state.platform ~= want_platform or state.platform_flag ~= want_flag then
+        return
+      end
+      state.procs = procs
+      redraw("body")
+    end)
+  end)
+  -- in-progress detection uses the (TTL-memoised) process scan + managed tasks,
+  -- not the async liveness probe, so it stays synchronous and cheap.
   local running = require("ledger.builder.running").running_steps(state.steps)
   local finished = false
   for _, step in ipairs(state.steps or {}) do
@@ -217,7 +279,13 @@ local function refresh_runtime()
     end
   end
   if finished then
-    refresh_statuses()
+    -- Defer the heavy recompute off the timer tick so the build-finish frame
+    -- doesn't block the UI thread (it re-reads the store, nx cache, staleness).
+    vim.schedule(function()
+      if state and state.root then
+        refresh_statuses()
+      end
+    end)
   end
 end
 
@@ -355,7 +423,7 @@ local function sections()
   }
 end
 
-local function redraw(which)
+function redraw(which)
   if state and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
     require("volt").redraw(state.buf, which or "all")
   end
@@ -863,6 +931,22 @@ end
 
 -- ── timers / animation ───────────────────────────────────────────────────────
 
+-- Is anything on screen actually animating right now? Only a step that's
+-- in_progress drives the spinner; the process activity sweep is decorative, so
+-- it doesn't justify the 120ms cadence. (The loader overlay is a separate float
+-- closed before mount.) Used to throttle the redraw clock to activity.
+local function is_animating()
+  if not state then
+    return false
+  end
+  for _, s in pairs(state.statuses or {}) do
+    if s == "in_progress" then
+      return true
+    end
+  end
+  return false
+end
+
 local function start_timer()
   local anim = cfg().animation or "max"
   local animated = anim == "max" or anim == "tasteful"
@@ -882,6 +966,12 @@ local function start_timer()
     )
     return
   end
+  -- Animated ("max" / "tasteful"): the timer ALWAYS fires at SPIN_MS so the
+  -- spinner is smooth the instant a build starts and the ~2s liveness poll keeps
+  -- its cadence — but we only REDRAW every tick while something is animating.
+  -- When idle, redraws collapse to the poll boundary (~2s), killing ~90% of the
+  -- old unconditional 8.3 Hz repaints. Cadence is re-evaluated every tick, so it
+  -- speeds up/slows down as statuses change.
   state.timer:start(
     SPIN_MS,
     SPIN_MS,
@@ -890,10 +980,13 @@ local function start_timer()
         return
       end
       state.tick = (state.tick or 0) + 1
-      if state.tick % PROC_REFRESH_EVERY == 0 then
+      local poll = state.tick % PROC_REFRESH_EVERY == 0
+      if poll then
         refresh_runtime()
       end
-      redraw("body")
+      if is_animating() or poll then
+        redraw("body")
+      end
     end)
   )
 end
@@ -1164,6 +1257,7 @@ local function set_keymaps()
   end)
   map("F", fix_menu)
   map("R", function()
+    require("ledger.builder.running").invalidate() -- force a fresh process scan
     refresh_statuses()
     redraw("all")
   end)
