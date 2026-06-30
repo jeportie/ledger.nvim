@@ -65,15 +65,37 @@ describe("ledger.tasks.templates", function()
   end)
 
   describe("parametric commands", function()
-    it("detox build prefixes pod for iOS only", function()
-      assert.equals(
-        "pnpm mobile pod && pnpm mobile e2e:build -c ios.sim.debug",
-        templates.resolve("mobile.detox.build", { config = "ios.sim.debug" }, ROOT).cmd
-      )
+    it("detox build no longer prefixes pod (mobile.pod is its own step)", function()
+      local ios = templates.resolve("mobile.detox.build", { config = "ios.sim.debug" }, ROOT).cmd
+      assert.equals("pnpm mobile e2e:build -c ios.sim.debug", ios)
+      assert.is_nil(ios:find("pnpm mobile pod", 1, true))
       assert.equals(
         "pnpm mobile e2e:build -c android.emu.release",
         templates.resolve("mobile.detox.build", { config = "android.emu.release" }, ROOT).cmd
       )
+    end)
+
+    it("run-app templates launch the native app without tests", function()
+      assert.equals("pnpm mobile ios", templates.resolve("mobile.run.ios", {}, ROOT).cmd)
+      assert.equals("pnpm mobile android", templates.resolve("mobile.run.android", {}, ROOT).cmd)
+      assert.equals("pnpm mobile ios:staging", templates.resolve("mobile.run.ios.staging", {}, ROOT).cmd)
+      assert.equals("pnpm mobile staging-android", templates.resolve("mobile.run.android.staging", {}, ROOT).cmd)
+      -- desktop production always rebuilds the prod bundle (build:js), then runs it
+      assert.equals(
+        "pnpm desktop build:js && pnpm desktop start:prod",
+        templates.resolve("desktop.run.prod", {}, ROOT).cmd
+      )
+      -- iOS simulator log stream is a daemon scoped to the app process
+      local simlogs = templates.resolve("mobile.sim.logs", {}, ROOT)
+      assert.is_true(simlogs.daemon)
+      assert.is_truthy(simlogs.cmd:find("simctl", 1, true))
+      assert.is_truthy(simlogs.cmd:find("log stream", 1, true))
+      assert.is_truthy(simlogs.cmd:find("ledgerlivemobile", 1, true))
+      -- speculos container logs (daemon)
+      local spec = templates.resolve("speculos.logs", {}, ROOT)
+      assert.is_true(spec.daemon)
+      assert.is_truthy(spec.cmd:find("docker logs", 1, true))
+      assert.is_truthy(spec.cmd:find("name=speculos", 1, true))
     end)
 
     it("detox test runs the leaf `detox test` with --configuration and applies scope", function()
@@ -152,6 +174,10 @@ describe("ledger.tasks.templates", function()
       assert.equals("pnpm clean", templates.resolve("shared.clean", {}, ROOT).cmd)
       assert.equals("rm -rf node_modules && pnpm store prune && pnpm i", templates.resolve("fix.global", {}, ROOT).cmd)
       assert.is_truthy(templates.resolve("fix.ios_pod", {}, ROOT).cmd:find("pnpm mobile pod", 1, true))
+      local sim = templates.resolve("fix.ios_sim", {}, ROOT).cmd
+      assert.is_truthy(sim:find("simctl", 1, true)) -- creates/boots via simctl
+      assert.is_truthy(sim:find('"iOS Simulator"', 1, true)) -- detox's device name
+      assert.is_truthy(sim:find("xcodebuild -downloadPlatform iOS", 1, true)) -- install hint
     end)
 
     it("lib watch defaults and overrides the package", function()

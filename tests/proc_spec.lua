@@ -33,7 +33,7 @@ describe("ledger.builder.proc", function()
   describe("detect_cmd (pure)", function()
     it("builds a port probe", function()
       assert.equals("lsof -ti:8081 -sTCP:LISTEN", proc.detect_cmd("metro"))
-      assert.equals("lsof -ti:8099 -sTCP:LISTEN", proc.detect_cmd("bridge"))
+      assert.equals("lsof -ti:8080 -sTCP:LISTEN", proc.detect_cmd("dev_lld")) -- rspack dev server
     end)
 
     it("builds a docker probe", function()
@@ -41,11 +41,37 @@ describe("ledger.builder.proc", function()
     end)
 
     it("returns the raw probe for command-based entries", function()
-      assert.equals("xcrun simctl list devices booted | grep -qi iphone", proc.detect_cmd("ios_sim"))
+      assert.equals(
+        "xcrun simctl list devices booted | grep -qiE 'iphone|ipad|ios simulator'",
+        proc.detect_cmd("ios_sim")
+      )
     end)
 
-    it("returns nil for managed-only entries", function()
-      assert.is_nil(proc.detect_cmd("dev_lld"))
+    it("returns nil for managed/task-only entries (no shell probe)", function()
+      -- detox bridge port is random → detected via the test task, not a probe
+      assert.is_nil(proc.detect_cmd("bridge"))
+      assert.equals("mobile.detox.test", proc.by_name.bridge.task)
+    end)
+  end)
+
+  describe("apply_task_liveness (pure)", function()
+    it("a `task` proc is alive iff its task runs; others untouched", function()
+      local procs = proc.apply_task_liveness(
+        { { name = "bridge", alive = false }, { name = "metro", alive = false } },
+        function(id)
+          return id == "mobile.detox.test"
+        end
+      )
+      assert.is_true(procs[1].alive) -- bridge: its task is running
+      assert.is_false(procs[2].alive) -- metro: no task field → untouched
+      local none = proc.apply_task_liveness({ { name = "bridge", alive = false } }, function()
+        return false
+      end)
+      assert.is_false(none[1].alive)
+    end)
+    it("ios_sim / speculos stream their logs via a start template", function()
+      assert.equals("mobile.sim.logs", proc.by_name.ios_sim.start)
+      assert.equals("speculos.logs", proc.by_name.speculos.start)
     end)
   end)
 
@@ -168,18 +194,22 @@ describe("ledger.builder.proc", function()
       end
     end)
 
-    it("resolves managed-only entries (dev_lld) to down without a probe", function()
-      local probed = false
+    it("probes dev_lld via its :8080 port (rspack dev server)", function()
+      local saw_lsof = false
       proc.for_platform_async("desktop", nil, function(list)
-        -- desktop = { speculos, dev_lld }; dev_lld has no detect_cmd
+        -- desktop = { speculos, dev_lld }; dev_lld now has a :8080 port probe
         local dev = list[2]
         assert.equals("dev_lld", dev.name)
-        assert.is_false(dev.alive)
+        assert.is_true(dev.alive) -- lsof returned a pid below
       end, function(cmd, cb)
-        probed = cmd:find("docker", 1, true) ~= nil -- only speculos should probe
-        cb({ code = 1, stdout = "" })
+        if cmd:find("lsof -ti:8080", 1, true) then
+          saw_lsof = true
+          cb({ code = 0, stdout = "4242\n" })
+        else
+          cb({ code = 1, stdout = "" })
+        end
       end)
-      assert.is_true(probed) -- speculos was probed; dev_lld was not
+      assert.is_true(saw_lsof) -- dev_lld is probed (no longer managed-only)
     end)
   end)
 end)

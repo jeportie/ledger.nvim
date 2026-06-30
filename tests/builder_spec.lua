@@ -503,14 +503,14 @@ describe("ledger.builder.ui.panes", function()
     assert.equals("mobile.metro", panes.current_log_id(st)) -- metro's log, not last_started
   end)
 
-  -- a focused process with no managed task (probe-only) shows nothing
+  -- a focused process with no start template (no own log) shows nothing
   it("current_log_id returns nil for a focused logless process (no bleed)", function()
     require("ledger.tasks").last_started = "mobile.detox.test"
     local st = vim.tbl_extend("force", {}, fake, {
-      procs = { { name = "speculos", label = "Speculos", alive = true } },
+      procs = { { name = "android_emu", label = "Android emulator", alive = true } },
       focus = { col = "processes", idx = 1 },
     })
-    assert.is_nil(panes.current_log_id(st)) -- speculos has no start template
+    assert.is_nil(panes.current_log_id(st)) -- android_emu has no start template
   end)
 
   -- a task-tracked card (the detox bridge) shows the log of the task it lives in
@@ -852,6 +852,22 @@ describe("ledger.builder.ui.hl + loader", function()
     assert.has_no.errors(function()
       require("ledger.builder.ui.loader")
     end)
+  end)
+end)
+
+describe("ledger.builder run-app dispatch", function()
+  local builder = require("ledger.builder")
+  it("offers Dev/Production (desktop) and Dev/Staging (mobile) run entries", function()
+    local function ids(platform, flag)
+      local out = {}
+      for _, e in ipairs(builder.run_app_entries(platform, flag)) do
+        out[#out + 1] = e.id
+      end
+      return out
+    end
+    assert.same({ "desktop.dev", "desktop.run.prod" }, ids("desktop"))
+    assert.same({ "mobile.run.ios", "mobile.run.ios.staging" }, ids("mobile", "ios"))
+    assert.same({ "mobile.run.android", "mobile.run.android.staging" }, ids("mobile", "android"))
   end)
 end)
 

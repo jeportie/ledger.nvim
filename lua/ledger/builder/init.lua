@@ -110,11 +110,11 @@ local function refresh_statuses()
     config = state.config,
     desktop_build = state.desktop_build,
   })
-  -- Process liveness is probed ASYNCHRONOUSLY (below) so the UI thread never
-  -- blocks on lsof/docker/xcrun. Seed `alive` from the previous probe so the
-  -- synchronous status pass is never blank; the async callback then refines
-  -- proc-gated steps + state.procs and redraws.
-  state.procs = state.procs or {}
+  -- Process liveness is probed ASYNCHRONOUSLY (below) so the UI thread never blocks
+  -- on lsof/docker/xcrun. Seed from the previous probe so the status pass is never
+  -- blank; overlay managed-task liveness (cheap, in-memory) so task-based cards like
+  -- the detox bridge are correct even before the async probe returns.
+  state.procs = proc.apply_task_liveness(state.procs or {}, require("ledger.tasks").is_running)
   state.watching = (state.watch_mode == "on-save") or (state.watch_mode == "nx" and tasks.is_running("shared.nx.watch"))
   -- Probe whether the Playwright browser is installed once per refresh (a
   -- filesystem scan), cached on state so the redraw path reads a boolean.
@@ -263,7 +263,8 @@ local function refresh_runtime()
       if not state or state.platform ~= want_platform or state.platform_flag ~= want_flag then
         return
       end
-      state.procs = procs
+      -- overlay managed-task liveness (detox bridge) onto the shell-probed procs
+      state.procs = proc.apply_task_liveness(procs, require("ledger.tasks").is_running)
       redraw("body")
     end)
   end)
@@ -518,6 +519,54 @@ function M.run_step_by_id(id)
     end
   end
   vim.notify("Builder: no '" .. id .. "' step for this platform", vim.log.levels.WARN)
+end
+
+-- The run entries (label → template id) the `o` menu offers for a platform/flag:
+-- desktop Dev (dev:lld) / Production (prebuilt bundle); mobile Dev / Staging on sim/emu.
+function M.run_app_entries(platform, flag)
+  if platform == "desktop" then
+    return {
+      { label = "Dev (dev:lld)", id = "desktop.dev" },
+      { label = "Production (prebuilt bundle)", id = "desktop.run.prod" },
+    }
+  elseif flag == "android" then
+    return {
+      { label = "Dev (Android emu)", id = "mobile.run.android" },
+      { label = "Staging (Android emu)", id = "mobile.run.android.staging" },
+    }
+  end
+  return {
+    { label = "Dev (iOS sim)", id = "mobile.run.ios" },
+    { label = "Staging (iOS sim)", id = "mobile.run.ios.staging" },
+  }
+end
+
+-- `o`: open a Dev/Production (desktop) or Dev/Staging (mobile) menu, then run the
+-- chosen app for the active platform — no tests.
+function M.run_app()
+  if not state.root then
+    return
+  end
+  local labels, by_label = {}, {}
+  for _, e in ipairs(M.run_app_entries(state.platform, state.platform_flag)) do
+    labels[#labels + 1] = e.label
+    by_label[e.label] = e.id
+  end
+  menus.open_menu("Run app", labels, nil, function(choice)
+    local id = by_label[choice]
+    if not id then
+      return
+    end
+    -- don't relaunch an already-running daemon (e.g. dev:lld on :8080 → EADDRINUSE)
+    for _, p in ipairs(state.procs or {}) do
+      local e = require("ledger.builder.proc").by_name[p.name]
+      if e and e.start == id and p.alive then
+        vim.notify("Builder: " .. p.label .. " is already running", vim.log.levels.INFO)
+        return
+      end
+    end
+    M.run_template(id)
+  end)
 end
 
 local function activate()
@@ -998,6 +1047,7 @@ local function fix_menu()
   end
   if state.platform == "mobile" and state.platform_flag == "ios" then
     items[#items + 1] = { label = "iOS pod fix (reset Pods)", id = "fix.ios_pod" }
+    items[#items + 1] = { label = "iOS simulator fix (create + boot)", id = "fix.ios_sim" }
   end
   items[#items + 1] = { label = "Clean (git clean -fdX)", id = "shared.clean" }
   local labels = {}
@@ -1335,6 +1385,9 @@ local function set_keymaps()
   end)
   map("B", function()
     M.run_step_by_id("build")
+  end)
+  map("o", function()
+    M.run_app()
   end)
   -- tests run from the navigable "Run tests" pipeline row (j to it, then <CR>)
   map("w", watch.menu)

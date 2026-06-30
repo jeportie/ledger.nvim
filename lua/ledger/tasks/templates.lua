@@ -23,11 +23,12 @@ function M.resolve_cwd(sym, root)
   return map[sym or "repo"] or root
 end
 
--- Build command for a detox configuration. iOS configs need pods first.
+-- Build command for a detox configuration. Pods are installed by the dedicated
+-- `mobile.pod` pipeline step (and run_all orders it before the build), so the
+-- build no longer reinstalls them on every run.
 local function detox_build_cmd(opts)
   local cfg = opts.config or "ios.sim.debug"
-  local prefix = cfg:match("^ios") and "pnpm mobile pod && " or ""
-  return prefix .. "pnpm mobile e2e:build -c " .. cfg
+  return "pnpm mobile e2e:build -c " .. cfg
 end
 
 -- Detox test command. Run the leaf `detox test` directly from e2e/mobile so a
@@ -72,6 +73,67 @@ local function pw_run_cmd(opts)
   end
   return prefix .. base
 end
+
+-- Guided iOS-simulator setup — resolves xcodebuild "Found no destinations for the
+-- scheme". xcodebuild builds against the iphonesimulator SDK (e.g. iOS 26.5), so a
+-- simulator runtime of that EXACT version must exist; an older runtime (e.g. 26.4)
+-- is ineligible. If the matching runtime is missing we print the one-time multi-GB
+-- install command and stop; otherwise we create + boot a simulator named
+-- "iOS Simulator" (the device name detox targets) on that runtime.
+-- NB: no `set -e` — be resilient (a booted device can't be deleted, simctl can
+-- exit non-zero on benign races); guard each step and print a manual fallback.
+local IOS_SIM_FIX = [[
+SDK=$(xcodebuild -showsdks 2>/dev/null | grep -oE "iphonesimulator[0-9.]+" | head -1 | sed 's/iphonesimulator//')
+if [ -z "$SDK" ]; then
+  echo "Could not determine the iphonesimulator SDK version (is Xcode selected?)."
+  exit 1
+fi
+if ! xcrun simctl list runtimes 2>/dev/null | grep -q "iOS $SDK "; then
+  echo "xcodebuild builds against the iOS $SDK simulator SDK, but no iOS $SDK runtime is installed."
+  echo "(An older runtime is ineligible — the simulator version must match the SDK.)"
+  echo "Install it (one-time, multi-GB), then re-run:"
+  echo "    xcodebuild -downloadPlatform iOS"
+  echo "  or: Xcode > Settings > Components > iOS $SDK Simulator"
+  exit 1
+fi
+RT=$(xcrun simctl list runtimes | grep "iOS $SDK " | grep -oE "com.apple.CoreSimulator.SimRuntime.iOS[^ ]*" | tail -1)
+DT=$(xcrun simctl list devicetypes | grep -oE "com.apple.CoreSimulator.SimDeviceType.iPhone[^ )]*" | tail -1)
+# detox targets a device NAMED "iOS Simulator"; keep exactly one, on the SDK runtime.
+TARGET=$(xcrun simctl list devices "$RT" 2>/dev/null | grep "iOS Simulator (" | grep -oiE "[0-9a-f-]{36}" | head -1)
+for u in $(xcrun simctl list devices 2>/dev/null | grep "iOS Simulator (" | grep -oiE "[0-9a-f-]{36}"); do
+  [ "$u" = "$TARGET" ] && continue
+  xcrun simctl shutdown "$u" 2>/dev/null
+  xcrun simctl delete "$u" 2>/dev/null
+done
+if [ -z "$TARGET" ]; then
+  echo "Creating 'iOS Simulator' ($DT on iOS $SDK)"
+  TARGET=$(xcrun simctl create "iOS Simulator" "$DT" "$RT" 2>/dev/null)
+fi
+if [ -z "$TARGET" ]; then
+  echo "Could not create the simulator. Create it manually, then retry:"
+  echo "    xcrun simctl create \"iOS Simulator\" \"$DT\" \"$RT\""
+  exit 1
+fi
+xcrun simctl boot "$TARGET" 2>/dev/null
+open -a Simulator 2>/dev/null
+echo "iOS Simulator ready (UDID $TARGET on iOS $SDK)."
+]]
+
+-- Follow the running speculos container's docker logs. The e2e harness recreates
+-- speculos per scenario, so when the current container exits we re-attach to the
+-- next one — keeping a continuous view of what's happening in docker across the run.
+local SPECULOS_LOGS = [[
+while true; do
+  cid=$(docker ps -q --filter name=speculos | head -1)
+  if [ -n "$cid" ]; then
+    echo "── speculos $(docker inspect -f '{{.Name}}' "$cid" 2>/dev/null | sed 's#^/##') ($cid) ──"
+    docker logs -f "$cid" 2>&1
+    echo "── speculos container exited; waiting for the next ──"
+  else
+    sleep 1
+  fi
+done
+]]
 
 -- The matrix. Order is roughly pipeline order per platform.
 M.templates = {
@@ -134,6 +196,19 @@ M.templates = {
     cwd = "repo",
     cmd = "pnpm dev:lld",
     daemon = true,
+  },
+  {
+    id = "desktop.run.prod",
+    label = "Desktop · run app (production bundle)",
+    platform = "desktop",
+    kind = "run",
+    cwd = "repo",
+    -- always build:js then run: the on-disk .webpack bundle is whatever ran last
+    -- (dev/testing/prod share one path), and a dev bundle pins the window to the
+    -- :8080 dev server → white screen. build:js is minified, __DEV__=false, loads
+    -- the renderer from file://. NB: this overwrites the build:testing bundle —
+    -- rebuild that before Playwright e2e.
+    cmd = "pnpm desktop build:js && pnpm desktop start:prod",
   },
   {
     id = "desktop.pw.setup",
@@ -217,6 +292,26 @@ M.templates = {
     daemon = true,
   },
   {
+    id = "mobile.sim.logs",
+    label = "Mobile · iOS simulator logs",
+    platform = "mobile",
+    kind = "daemon",
+    cwd = "repo",
+    -- stream the booted sim's app log (unbounded → daemon; kill via the proc card)
+    cmd = "xcrun simctl spawn booted log stream --level info --style compact --color none --predicate 'process == \"ledgerlivemobile\"'",
+    daemon = true,
+  },
+  {
+    id = "speculos.logs",
+    label = "Speculos · container logs",
+    platform = "shared",
+    kind = "daemon",
+    cwd = "repo",
+    -- follow the running speculos container's docker logs (unbounded → daemon)
+    cmd = SPECULOS_LOGS,
+    daemon = true,
+  },
+  {
     id = "mobile.detox.build",
     label = "Mobile · Detox build",
     platform = "mobile",
@@ -231,6 +326,38 @@ M.templates = {
     kind = "test",
     cwd = "e2e_mobile",
     cmd = detox_test_cmd,
+  },
+  {
+    id = "mobile.run.ios",
+    label = "Mobile · run app (iOS sim)",
+    platform = "mobile",
+    kind = "run",
+    cwd = "repo",
+    cmd = "pnpm mobile ios",
+  },
+  {
+    id = "mobile.run.android",
+    label = "Mobile · run app (Android emu)",
+    platform = "mobile",
+    kind = "run",
+    cwd = "repo",
+    cmd = "pnpm mobile android",
+  },
+  {
+    id = "mobile.run.ios.staging",
+    label = "Mobile · run app (iOS sim · Staging)",
+    platform = "mobile",
+    kind = "run",
+    cwd = "repo",
+    cmd = "pnpm mobile ios:staging",
+  },
+  {
+    id = "mobile.run.android.staging",
+    label = "Mobile · run app (Android emu · Staging)",
+    platform = "mobile",
+    kind = "run",
+    cwd = "repo",
+    cmd = "pnpm mobile staging-android",
   },
   {
     id = "mobile.e2e.ci",
@@ -332,6 +459,14 @@ M.templates = {
     kind = "fix",
     cwd = "repo",
     cmd = "cd apps/ledger-live-mobile/ios && rm -rf Pods Podfile.lock && cd ../../.. && pnpm mobile pod",
+  },
+  {
+    id = "fix.ios_sim",
+    label = "Fix · iOS simulator (create + boot 'iOS Simulator')",
+    platform = "mobile",
+    kind = "fix",
+    cwd = "repo",
+    cmd = IOS_SIM_FIX,
   },
 }
 

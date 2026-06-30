@@ -823,6 +823,7 @@ function M.help_shortcuts()
     row("t", "build a project", "current file / picked / filter"),
     row("z", "fold sub-steps", "show / hide per-project rebuilds"),
     row("B", "build", "→ desktop build:* / detox e2e:build"),
+    row("o", "run app menu", "Dev / Production (desktop) · Dev / Staging (mobile)"),
     row("x / s", "stop step·test / start process", "x stops a running build/test, else kills the process"),
     row("e", "env dropdown", "desktop: build/MOCK · mobile: detox config"),
     row("p", "toggle PWDEBUG (desktop)"),

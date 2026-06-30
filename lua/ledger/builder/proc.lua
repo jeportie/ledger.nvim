@@ -35,17 +35,22 @@ M.registry = {
   {
     name = "bridge",
     label = "Detox bridge",
-    port = 8099,
+    -- Detox 20 binds the bridge to a random ephemeral port, so there's nothing
+    -- stable to probe; it's up exactly while the detox test task runs.
+    task = "mobile.detox.test",
   },
   {
     name = "speculos",
     label = "Speculos",
     docker = "name=speculos",
+    start = "speculos.logs", -- `s` follows the container's docker logs in this card
   },
   {
     name = "ios_sim",
     label = "iOS simulator",
-    probe = "xcrun simctl list devices booted | grep -qi iphone",
+    -- match the detox device named "iOS Simulator" too, not just stock iPhone/iPad names
+    probe = "xcrun simctl list devices booted | grep -qiE 'iphone|ipad|ios simulator'",
+    start = "mobile.sim.logs", -- `s` streams the booted sim's app log into this card
   },
   {
     name = "android_emu",
@@ -56,8 +61,7 @@ M.registry = {
     name = "dev_lld",
     label = "dev:lld",
     start = "desktop.dev",
-    -- node/electron process with no stable listening port; tracked via the
-    -- managed task rather than a shell probe (status falls back to managed).
+    port = 8080, -- the rspack dev server dev:lld serves on (also gates double-start)
   },
 }
 
@@ -74,6 +78,20 @@ function M.list()
     out[#out + 1] = e.name
   end
   return out
+end
+
+-- Overlay managed-task liveness onto a status list: a proc with a `task` field is
+-- alive iff that task runs. `is_running` is injected (tasks.is_running) so this
+-- stays pure/testable. Used for cards with no stable shell probe (e.g. the detox
+-- bridge, whose port is random).
+function M.apply_task_liveness(procs, is_running)
+  for _, p in ipairs(procs) do
+    local e = M.by_name[p.name]
+    if e and e.task and is_running(e.task) then
+      p.alive = true
+    end
+  end
+  return procs
 end
 
 -- Pure: the shell command used to detect liveness, or nil if this entry has no
