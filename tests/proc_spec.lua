@@ -13,6 +13,16 @@ local function fake_runner(rules)
   end
 end
 
+-- Async equivalent: same rule table, but invokes `cb` (synchronously, so tests
+-- stay deterministic — no event-loop pumping). Mirrors `default_async_runner`'s
+-- (cmd, cb) shape.
+local function fake_async_runner(rules)
+  local sync = fake_runner(rules)
+  return function(cmd, cb)
+    cb(sync(cmd))
+  end
+end
+
 describe("ledger.builder.proc", function()
   it("lists processes in registry order", function()
     local list = proc.list()
@@ -89,5 +99,87 @@ describe("ledger.builder.proc", function()
     local r = fake_runner({})
     local all = proc.status_all(r)
     assert.equals(#proc.list(), #all)
+  end)
+
+  -- The synchronous injectable path is the unit-test contract; assert it still
+  -- behaves exactly as before alongside the new async fan-out.
+  it("the synchronous for_platform path is unchanged", function()
+    local r = fake_runner({
+      ["lsof -ti:8081"] = { code = 0, stdout = "111\n" }, -- metro alive
+      ["lsof -ti:8099"] = { code = 1, stdout = "" }, -- bridge down
+      ["docker ps"] = { code = 0, stdout = "abc\n" }, -- speculos alive (1 ctr)
+      ["xcrun"] = { code = 1, stdout = "" }, -- ios_sim down
+    })
+    local list = proc.for_platform("mobile", "ios", r)
+    assert.equals(4, #list)
+    assert.equals("metro", list[1].name)
+    assert.is_true(list[1].alive)
+    assert.is_false(list[2].alive) -- bridge
+    assert.is_true(list[3].alive) -- speculos
+    assert.equals(1, list[3].count)
+    assert.is_false(list[4].alive) -- ios_sim
+  end)
+
+  describe("for_platform_async", function()
+    it("calls back with the platform's statuses, in order", function()
+      local got
+      proc.for_platform_async(
+        "mobile",
+        "ios",
+        function(list)
+          got = list
+        end,
+        fake_async_runner({
+          ["lsof -ti:8081"] = { code = 0, stdout = "111\n" }, -- metro alive
+          ["lsof -ti:8099"] = { code = 1, stdout = "" }, -- bridge down
+          ["docker ps"] = { code = 0, stdout = "a\nb\n" }, -- speculos: 2 ctr
+          ["xcrun"] = { code = 0, stdout = "" }, -- ios_sim alive (probe exit 0)
+        })
+      )
+      assert.is_table(got)
+      assert.equals(4, #got)
+      assert.same({ "metro", "bridge", "speculos", "ios_sim" }, {
+        got[1].name,
+        got[2].name,
+        got[3].name,
+        got[4].name,
+      })
+      assert.is_true(got[1].alive) -- metro
+      assert.is_false(got[2].alive) -- bridge
+      assert.is_true(got[3].alive) -- speculos
+      assert.equals(2, got[3].count)
+      assert.is_true(got[4].alive) -- ios_sim
+    end)
+
+    it("matches the synchronous statuses for the same inputs", function()
+      local rules = {
+        ["docker ps"] = { code = 0, stdout = "x\n" }, -- speculos alive
+      }
+      local sync = proc.for_platform("desktop", nil, fake_runner(rules))
+      local async
+      proc.for_platform_async("desktop", nil, function(list)
+        async = list
+      end, fake_async_runner(rules))
+      assert.equals(#sync, #async)
+      for i = 1, #sync do
+        assert.equals(sync[i].name, async[i].name)
+        assert.equals(sync[i].alive, async[i].alive)
+        assert.equals(sync[i].count, async[i].count)
+      end
+    end)
+
+    it("resolves managed-only entries (dev_lld) to down without a probe", function()
+      local probed = false
+      proc.for_platform_async("desktop", nil, function(list)
+        -- desktop = { speculos, dev_lld }; dev_lld has no detect_cmd
+        local dev = list[2]
+        assert.equals("dev_lld", dev.name)
+        assert.is_false(dev.alive)
+      end, function(cmd, cb)
+        probed = cmd:find("docker", 1, true) ~= nil -- only speculos should probe
+        cb({ code = 1, stdout = "" })
+      end)
+      assert.is_true(probed) -- speculos was probed; dev_lld was not
+    end)
   end)
 end)
