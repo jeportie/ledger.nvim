@@ -532,6 +532,24 @@ describe("ledger.builder.ui.panes", function()
     assert.equals("desktop.pw.run", runtests_log("desktop"))
   end)
 
+  -- focused_task_id backs both the Logs panel and the stop (x) action
+  it("focused_task_id resolves the focused pipeline item (nil off-pipeline)", function()
+    local steps = require("ledger.builder.pipeline").steps("mobile", { platform_flag = "ios" })
+    local base = { platform = "mobile", platform_flag = "ios", steps = steps, show_substeps = false }
+    local function focus(idx)
+      return vim.tbl_extend("force", {}, fake, base, { focus = { col = "pipeline", idx = idx } })
+    end
+    assert.equals(steps[1].template, panes.focused_task_id(focus(1))) -- first build step
+    assert.equals("mobile.detox.test", panes.focused_task_id(focus(#steps + 1))) -- Run-tests row
+    local proc = vim.tbl_extend(
+      "force",
+      {},
+      fake,
+      { procs = { { name = "metro" } }, focus = { col = "processes", idx = 1 } }
+    )
+    assert.is_nil(panes.focused_task_id(proc)) -- a focused process is not a pipeline task
+  end)
+
   it("Logs panel shows the running test's log when the Run-tests row is focused", function()
     local tasks = require("ledger.tasks")
     tasks.inject("desktop.pw.run", { "Running 3 tests", "✓ all passed" }, 0)

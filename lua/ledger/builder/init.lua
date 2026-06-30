@@ -510,6 +510,27 @@ local function proc_action(kind)
   end, 350)
 end
 
+-- `x`: stop the focused thing — a running pipeline step/test (tasks.stop) when the
+-- Pipeline column is focused, else kill the focused process.
+local function stop_focused()
+  if not state.root then
+    return
+  end
+  if focused_view() == "pipeline" then
+    local tasks = require("ledger.tasks")
+    local id = require("ledger.builder.ui.panes").focused_task_id(state)
+    if id and tasks.is_running(id) then
+      tasks.stop(id)
+      vim.defer_fn(function()
+        refresh_statuses()
+        redraw("all")
+      end, 200)
+    end
+    return
+  end
+  proc_action("kill")
+end
+
 -- Per-process popup: full info (command, port, uptime), log tail, and actions
 -- (s start / x kill / R restart / q close). Navigable with j/k.
 function M.proc_popup(p)
@@ -768,10 +789,19 @@ local function pick_test_name()
       return
     end
     t = t:gsub("^%s+", ""):gsub("%s+$", "")
-    if t ~= "" and t:match("%a") and not seen[t] then
+    if t == "" or not t:match("%a") then
+      return
+    end
+    local rel = file:gsub("^" .. vim.pesc(base .. "/"), "")
+    local is_spec = rel:match("%.spec%.ts$") ~= nil -- jest only runs *.spec.ts
+    if not seen[t] then
       seen[t] = true
       names[#names + 1] = t
-      file_of[t] = file:gsub("^" .. vim.pesc(base .. "/"), "") -- jest-rootDir-relative
+      if is_spec then
+        file_of[t] = rel -- scope the run to this spec (one app launch)
+      end
+    elseif is_spec and not file_of[t] then
+      file_of[t] = rel -- prefer a real spec over a helper occurrence of the title
     end
   end)
   table.sort(names)
@@ -1160,9 +1190,7 @@ local function set_keymaps()
   map("<", toggle_bottom)
   map("<C-t>", toggle_bottom)
   map("<CR>", activate)
-  map("x", function()
-    proc_action("kill")
-  end)
+  map("x", stop_focused)
   map("s", function()
     proc_action("start")
   end)

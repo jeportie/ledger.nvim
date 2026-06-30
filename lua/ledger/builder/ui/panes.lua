@@ -586,8 +586,26 @@ function M.process_popup_content(info)
   return lines
 end
 
--- The task id whose log the panel shows: a pinned ad-hoc/watch log (st.log_id),
--- else the focused pipeline item's task (step or sub-step), else the last started.
+-- The task id of the focused PIPELINE item: a step's template, a sub-step's task,
+-- or the platform's test task for the Run-tests row. nil when the Processes column
+-- is focused or the item carries no task. Used by the Logs panel + the stop (x) action.
+function M.focused_task_id(st)
+  if not (st.focus and st.focus.col == "pipeline") then
+    return nil
+  end
+  local it = M.pipeline_items(st)[st.focus.idx]
+  if not it then
+    return nil
+  end
+  if it.kind == "runtests" then
+    -- the test task (not last_started, which could be Metro or a later build)
+    return st.platform == "desktop" and "desktop.pw.run" or "mobile.detox.test"
+  end
+  return (it.step and it.step.template) or (it.sub and it.sub.task_id) or nil
+end
+
+-- The task id whose log the panel shows: a focused process's own log, else a pinned
+-- ad-hoc/watch log (st.log_id), else the focused pipeline item's task, else last started.
 function M.current_log_id(st)
   -- a focused process shows ITS OWN task log (metro → "mobile.metro"); a process
   -- with no managed task shows nothing (never bleed another task's log).
@@ -599,19 +617,9 @@ function M.current_log_id(st)
   if st.log_id then
     return st.log_id
   end
-  if st.focus and st.focus.col == "pipeline" then
-    local it = M.pipeline_items(st)[st.focus.idx]
-    if it then
-      if it.kind == "runtests" then
-        -- the Run-tests row shows the test task's log (not last_started, which
-        -- could be Metro or a build that ran afterwards)
-        return st.platform == "desktop" and "desktop.pw.run" or "mobile.detox.test"
-      end
-      local id = (it.step and it.step.template) or (it.sub and it.sub.task_id)
-      if id then
-        return id
-      end
-    end
+  local focused = M.focused_task_id(st)
+  if focused then
+    return focused
   end
   return require("ledger.tasks").last_started
 end
@@ -808,7 +816,7 @@ function M.help_shortcuts()
     row("t", "build a project", "current file / picked / filter"),
     row("z", "fold sub-steps", "show / hide per-project rebuilds"),
     row("B", "build", "→ desktop build:* / detox e2e:build"),
-    row("x / s", "kill / start focused process"),
+    row("x / s", "stop step·test / start process", "x stops a running build/test, else kills the process"),
     row("e", "env dropdown", "desktop: build/MOCK · mobile: detox config"),
     row("p", "toggle PWDEBUG (desktop)"),
     row("d", "Speculos device dropdown"),
