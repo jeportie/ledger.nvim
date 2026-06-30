@@ -97,13 +97,21 @@ fi
 RT=$(xcrun simctl list runtimes | grep "iOS $SDK " | grep -oE "com.apple.CoreSimulator.SimRuntime.iOS[^ ]*" | tail -1)
 [ -z "$RT" ] && RT=$(xcrun simctl list runtimes | grep "iOS " | grep -oE "com.apple.CoreSimulator.SimRuntime.iOS[^ ]*" | tail -1)
 DT=$(xcrun simctl list devicetypes | grep -oE "com.apple.CoreSimulator.SimDeviceType.iPhone[^ )]*" | tail -1)
-if ! xcrun simctl list devices | grep -q "iOS Simulator ("; then
-  echo "Creating simulator 'iOS Simulator' ($DT on $RT)"
-  xcrun simctl create "iOS Simulator" "$DT" "$RT"
+# detox targets a device NAMED "iOS Simulator"; it must live on the SDK-matching
+# runtime ($RT). Reuse one already on $RT; else delete any stale same-named devices
+# (e.g. left on an older runtime) so the name is unambiguous, and create it on $RT.
+# Boot by UDID so the correct one comes up.
+UDID=$(xcrun simctl list devices "$RT" | grep "iOS Simulator (" | grep -oiE "[0-9a-f-]{36}" | head -1)
+if [ -z "$UDID" ]; then
+  for u in $(xcrun simctl list devices | grep "iOS Simulator (" | grep -oiE "[0-9a-f-]{36}"); do
+    xcrun simctl delete "$u" || true
+  done
+  echo "Creating 'iOS Simulator' ($DT on iOS $SDK)"
+  UDID=$(xcrun simctl create "iOS Simulator" "$DT" "$RT")
 fi
-xcrun simctl boot "iOS Simulator" 2>/dev/null || true
+xcrun simctl boot "$UDID" 2>/dev/null || true
 open -a Simulator || true
-echo "iOS Simulator ready (runtime $RT)."
+echo "iOS Simulator ready (UDID $UDID on $RT)."
 ]]
 
 -- The matrix. Order is roughly pipeline order per platform.
