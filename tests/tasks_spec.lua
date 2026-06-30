@@ -34,6 +34,8 @@ describe("ledger.tasks.templates", function()
 
   it("marks daemons", function()
     assert.is_true(templates.resolve("mobile.metro", {}, ROOT).daemon)
+    -- metro starts the bundler directly (not `nx run …:start`, which rebuilds libs)
+    assert.equals("pnpm mobile start", templates.resolve("mobile.metro", {}, ROOT).cmd)
     assert.is_true(templates.resolve("desktop.dev", {}, ROOT).daemon)
     assert.is_false(templates.resolve("mobile.pod", {}, ROOT).daemon)
   end)
@@ -80,16 +82,27 @@ describe("ledger.tasks.templates", function()
         "pnpm detox test --configuration ios.sim.debug",
         templates.resolve("mobile.detox.test", { config = "ios.sim.debug", scope = "all" }, ROOT).cmd
       )
-      -- file: --testPathPattern
+      -- file: spec passed POSITIONALLY (jest dropped --testPathPattern in v30)
       assert.equals(
-        "pnpm detox test --configuration ios.sim.debug --testPathPattern specs/swap/x.spec.ts",
+        "pnpm detox test --configuration ios.sim.debug specs/swap/x.spec.ts",
         templates.resolve(
           "mobile.detox.test",
           { config = "ios.sim.debug", scope = "file", spec = "specs/swap/x.spec.ts" },
           ROOT
         ).cmd
       )
-      -- name with spaces stays ONE quoted -t token (the bug we fixed)
+      -- name + its spec: scope to ONE file AND one test (one app launch); the
+      -- name with spaces stays a single quoted -t token (the quoting fix)
+      assert.equals(
+        'pnpm detox test --configuration ios.sim.debug specs/swap/x.spec.ts -t "Checks if the amount is hidden in the asset drawer"',
+        templates.resolve("mobile.detox.test", {
+          config = "ios.sim.debug",
+          scope = "name",
+          spec = "specs/swap/x.spec.ts",
+          name = "Checks if the amount is hidden in the asset drawer",
+        }, ROOT).cmd
+      )
+      -- name without a known spec (free-text grep): just the -t filter
       assert.equals(
         'pnpm detox test --configuration ios.sim.debug -t "Checks if the amount is hidden in the asset drawer"',
         templates.resolve("mobile.detox.test", {

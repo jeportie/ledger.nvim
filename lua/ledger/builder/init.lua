@@ -758,13 +758,20 @@ end
 -- Pick by test NAME: it()/test() titles in the target's specs. Multiline -U so
 -- desktop Playwright (title on the line after `test(`) is captured too.
 local function pick_test_name()
-  local dir = specs_root()
-  local names, seen = {}, {}
-  rg_lines({ "rg", "-U", "--no-filename", "-o", "-r", "$1", [[(?:it|test)\(\s*['"`]([^'"`]+)]], dir }, function(line)
-    local t = line:gsub("^%s+", ""):gsub("%s+$", "")
+  local dir, base = specs_root()
+  local names, seen, file_of = {}, {}, {}
+  -- -H forces the filename prefix (even for a single match) so we can scope the
+  -- run to the ONE spec that holds the title (else detox relaunches per file).
+  rg_lines({ "rg", "-U", "-H", "-o", "-r", "$1", [[(?:it|test)\(\s*['"`]([^'"`]+)]], dir }, function(line)
+    local file, t = line:match("^([^:]+):(.*)$")
+    if not file then
+      return
+    end
+    t = t:gsub("^%s+", ""):gsub("%s+$", "")
     if t ~= "" and t:match("%a") and not seen[t] then
       seen[t] = true
       names[#names + 1] = t
+      file_of[t] = file:gsub("^" .. vim.pesc(base .. "/"), "") -- jest-rootDir-relative
     end
   end)
   table.sort(names)
@@ -776,24 +783,31 @@ local function pick_test_name()
     if sel:match("^✎") then
       vim.ui.input({ prompt = "Name / grep: " }, function(input)
         if input and input ~= "" then
-          do_run_test({ scope = "name", name = input })
+          do_run_test({ scope = "name", name = input }) -- free text: no file known
         end
       end)
     else
-      do_run_test({ scope = "name", name = sel })
+      -- pair the title with its file so jest loads only that spec (one launch)
+      do_run_test({ scope = "name", name = sel, spec = file_of[sel] })
     end
   end)
 end
 
 -- Pick by TICKET: B2CQA-#### referenced in the target's specs.
 local function pick_ticket()
-  local dir = specs_root()
-  local tickets, seen = {}, {}
-  rg_lines({ "rg", "--no-filename", "-o", "B2CQA-\\d+", dir }, function(line)
-    for tok in line:gmatch("B2CQA%-%d+") do
+  local dir, base = specs_root()
+  local tickets, seen, file_of = {}, {}, {}
+  rg_lines({ "rg", "-H", "-o", "B2CQA-\\d+", dir }, function(line)
+    local file, rest = line:match("^([^:]+):(.*)$")
+    if not file then
+      return
+    end
+    local rel = file:gsub("^" .. vim.pesc(base .. "/"), "")
+    for tok in rest:gmatch("B2CQA%-%d+") do
       if not seen[tok] then
         seen[tok] = true
         tickets[#tickets + 1] = tok
+        file_of[tok] = rel -- scope to the first spec referencing the ticket
       end
     end
   end)
@@ -804,7 +818,7 @@ local function pick_ticket()
   end
   vim.ui.select(tickets, { prompt = "Ticket (" .. target_label() .. ")" }, function(sel)
     if sel then
-      do_run_test({ scope = "name", name = sel })
+      do_run_test({ scope = "name", name = sel, spec = file_of[sel] })
     end
   end)
 end
