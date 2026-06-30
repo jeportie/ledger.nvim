@@ -35,6 +35,7 @@ M.registry = {
     name = "speculos",
     label = "Speculos",
     docker = "name=speculos",
+    start = "speculos.logs", -- `s` follows the container's docker logs in this card
   },
   {
     name = "ios_sim",

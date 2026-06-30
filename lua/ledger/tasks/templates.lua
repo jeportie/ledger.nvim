@@ -287,6 +287,16 @@ M.templates = {
     daemon = true,
   },
   {
+    id = "speculos.logs",
+    label = "Speculos · container logs",
+    platform = "shared",
+    kind = "daemon",
+    cwd = "repo",
+    -- follow the running speculos container's docker logs (unbounded → daemon)
+    cmd = 'cid=$(docker ps -q --filter name=speculos | head -1); if [ -z "$cid" ]; then echo \'no speculos container running\'; exit 0; fi; docker logs -f "$cid"',
+    daemon = true,
+  },
+  {
     id = "mobile.detox.build",
     label = "Mobile · Detox build",
     platform = "mobile",
