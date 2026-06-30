@@ -83,35 +83,43 @@ end
 -- is ineligible. If the matching runtime is missing we print the one-time multi-GB
 -- install command and stop; otherwise we create + boot a simulator named
 -- "iOS Simulator" (the device name detox targets) on that runtime.
+-- NB: no `set -e` — be resilient (a booted device can't be deleted, simctl can
+-- exit non-zero on benign races); guard each step and print a manual fallback.
 local IOS_SIM_FIX = [[
-set -e
 SDK=$(xcodebuild -showsdks 2>/dev/null | grep -oE "iphonesimulator[0-9.]+" | head -1 | sed 's/iphonesimulator//')
-if [ -n "$SDK" ] && ! xcrun simctl list runtimes 2>/dev/null | grep -q "iOS $SDK "; then
+if [ -z "$SDK" ]; then
+  echo "Could not determine the iphonesimulator SDK version (is Xcode selected?)."
+  exit 1
+fi
+if ! xcrun simctl list runtimes 2>/dev/null | grep -q "iOS $SDK "; then
   echo "xcodebuild builds against the iOS $SDK simulator SDK, but no iOS $SDK runtime is installed."
   echo "(An older runtime is ineligible — the simulator version must match the SDK.)"
-  echo "Install it (one-time, multi-GB), then re-run the build:"
+  echo "Install it (one-time, multi-GB), then re-run:"
   echo "    xcodebuild -downloadPlatform iOS"
   echo "  or: Xcode > Settings > Components > iOS $SDK Simulator"
   exit 1
 fi
 RT=$(xcrun simctl list runtimes | grep "iOS $SDK " | grep -oE "com.apple.CoreSimulator.SimRuntime.iOS[^ ]*" | tail -1)
-[ -z "$RT" ] && RT=$(xcrun simctl list runtimes | grep "iOS " | grep -oE "com.apple.CoreSimulator.SimRuntime.iOS[^ ]*" | tail -1)
 DT=$(xcrun simctl list devicetypes | grep -oE "com.apple.CoreSimulator.SimDeviceType.iPhone[^ )]*" | tail -1)
-# detox targets a device NAMED "iOS Simulator"; it must live on the SDK-matching
-# runtime ($RT). Reuse one already on $RT; else delete any stale same-named devices
-# (e.g. left on an older runtime) so the name is unambiguous, and create it on $RT.
-# Boot by UDID so the correct one comes up.
-UDID=$(xcrun simctl list devices "$RT" | grep "iOS Simulator (" | grep -oiE "[0-9a-f-]{36}" | head -1)
-if [ -z "$UDID" ]; then
-  for u in $(xcrun simctl list devices | grep "iOS Simulator (" | grep -oiE "[0-9a-f-]{36}"); do
-    xcrun simctl delete "$u" || true
-  done
+# detox targets a device NAMED "iOS Simulator"; keep exactly one, on the SDK runtime.
+TARGET=$(xcrun simctl list devices "$RT" 2>/dev/null | grep "iOS Simulator (" | grep -oiE "[0-9a-f-]{36}" | head -1)
+for u in $(xcrun simctl list devices 2>/dev/null | grep "iOS Simulator (" | grep -oiE "[0-9a-f-]{36}"); do
+  [ "$u" = "$TARGET" ] && continue
+  xcrun simctl shutdown "$u" 2>/dev/null
+  xcrun simctl delete "$u" 2>/dev/null
+done
+if [ -z "$TARGET" ]; then
   echo "Creating 'iOS Simulator' ($DT on iOS $SDK)"
-  UDID=$(xcrun simctl create "iOS Simulator" "$DT" "$RT")
+  TARGET=$(xcrun simctl create "iOS Simulator" "$DT" "$RT" 2>/dev/null)
 fi
-xcrun simctl boot "$UDID" 2>/dev/null || true
-open -a Simulator || true
-echo "iOS Simulator ready (UDID $UDID on $RT)."
+if [ -z "$TARGET" ]; then
+  echo "Could not create the simulator. Create it manually, then retry:"
+  echo "    xcrun simctl create \"iOS Simulator\" \"$DT\" \"$RT\""
+  exit 1
+fi
+xcrun simctl boot "$TARGET" 2>/dev/null
+open -a Simulator 2>/dev/null
+echo "iOS Simulator ready (UDID $TARGET on iOS $SDK)."
 ]]
 
 -- The matrix. Order is roughly pipeline order per platform.
@@ -175,6 +183,16 @@ M.templates = {
     cwd = "repo",
     cmd = "pnpm dev:lld",
     daemon = true,
+  },
+  {
+    id = "desktop.run.prod",
+    label = "Desktop · run app (production bundle)",
+    platform = "desktop",
+    kind = "run",
+    cwd = "repo",
+    -- run the prebuilt Electron bundle; build it with build:js (NOT build:testing,
+    -- the Playwright TESTING=1 bundle) only when none exists yet, so the two don't clash.
+    cmd = "[ -f apps/ledger-live-desktop/.webpack/main.bundle.js ] || pnpm desktop build:js; pnpm desktop start:prod",
   },
   {
     id = "desktop.pw.setup",
@@ -286,6 +304,22 @@ M.templates = {
     kind = "run",
     cwd = "repo",
     cmd = "pnpm mobile android",
+  },
+  {
+    id = "mobile.run.ios.staging",
+    label = "Mobile · run app (iOS sim · Staging)",
+    platform = "mobile",
+    kind = "run",
+    cwd = "repo",
+    cmd = "pnpm mobile ios:staging",
+  },
+  {
+    id = "mobile.run.android.staging",
+    label = "Mobile · run app (Android emu · Staging)",
+    platform = "mobile",
+    kind = "run",
+    cwd = "repo",
+    cmd = "pnpm mobile staging-android",
   },
   {
     id = "mobile.e2e.ci",

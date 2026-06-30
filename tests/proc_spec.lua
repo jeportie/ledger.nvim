@@ -31,7 +31,10 @@ describe("ledger.builder.proc", function()
     end)
 
     it("returns the raw probe for command-based entries", function()
-      assert.equals("xcrun simctl list devices booted | grep -qi iphone", proc.detect_cmd("ios_sim"))
+      assert.equals(
+        "xcrun simctl list devices booted | grep -qiE 'iphone|ipad|ios simulator'",
+        proc.detect_cmd("ios_sim")
+      )
     end)
 
     it("returns nil for managed-only entries", function()

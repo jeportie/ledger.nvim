@@ -37,7 +37,8 @@ M.registry = {
   {
     name = "ios_sim",
     label = "iOS simulator",
-    probe = "xcrun simctl list devices booted | grep -qi iphone",
+    -- match the detox device named "iOS Simulator" too, not just stock iPhone/iPad names
+    probe = "xcrun simctl list devices booted | grep -qiE 'iphone|ipad|ios simulator'",
   },
   {
     name = "android_emu",

@@ -796,9 +796,16 @@ end)
 
 describe("ledger.builder run-app dispatch", function()
   local builder = require("ledger.builder")
-  it("maps platform/flag to the run-app template", function()
-    assert.equals("desktop.dev", builder.run_app_id("desktop")) -- reuses dev:lld
-    assert.equals("mobile.run.ios", builder.run_app_id("mobile", "ios"))
-    assert.equals("mobile.run.android", builder.run_app_id("mobile", "android"))
+  it("offers Dev/Production (desktop) and Dev/Staging (mobile) run entries", function()
+    local function ids(platform, flag)
+      local out = {}
+      for _, e in ipairs(builder.run_app_entries(platform, flag)) do
+        out[#out + 1] = e.id
+      end
+      return out
+    end
+    assert.same({ "desktop.dev", "desktop.run.prod" }, ids("desktop"))
+    assert.same({ "mobile.run.ios", "mobile.run.ios.staging" }, ids("mobile", "ios"))
+    assert.same({ "mobile.run.android", "mobile.run.android.staging" }, ids("mobile", "android"))
   end)
 end)

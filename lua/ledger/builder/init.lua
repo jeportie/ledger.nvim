@@ -452,23 +452,43 @@ function M.run_step_by_id(id)
   vim.notify("Builder: no '" .. id .. "' step for this platform", vim.log.levels.WARN)
 end
 
--- Which template runs "the app" (no tests) for a platform/flag. Desktop reuses the
--- dev:lld server (the Electron dev app); mobile runs the native app on a sim/emu.
-function M.run_app_id(platform, flag)
+-- The run entries (label → template id) the `o` menu offers for a platform/flag:
+-- desktop Dev (dev:lld) / Production (prebuilt bundle); mobile Dev / Staging on sim/emu.
+function M.run_app_entries(platform, flag)
   if platform == "desktop" then
-    return "desktop.dev"
+    return {
+      { label = "Dev (dev:lld)", id = "desktop.dev" },
+      { label = "Production (prebuilt bundle)", id = "desktop.run.prod" },
+    }
   elseif flag == "android" then
-    return "mobile.run.android"
+    return {
+      { label = "Dev (Android emu)", id = "mobile.run.android" },
+      { label = "Staging (Android emu)", id = "mobile.run.android.staging" },
+    }
   end
-  return "mobile.run.ios"
+  return {
+    { label = "Dev (iOS sim)", id = "mobile.run.ios" },
+    { label = "Staging (iOS sim)", id = "mobile.run.ios.staging" },
+  }
 end
 
--- Run the native app for the active platform, without tests.
+-- `o`: open a Dev/Production (desktop) or Dev/Staging (mobile) menu, then run the
+-- chosen app for the active platform — no tests.
 function M.run_app()
   if not state.root then
     return
   end
-  M.run_template(M.run_app_id(state.platform, state.platform_flag))
+  local labels, by_label = {}, {}
+  for _, e in ipairs(M.run_app_entries(state.platform, state.platform_flag)) do
+    labels[#labels + 1] = e.label
+    by_label[e.label] = e.id
+  end
+  menus.open_menu("Run app", labels, nil, function(choice)
+    local id = by_label[choice]
+    if id then
+      M.run_template(id)
+    end
+  end)
 end
 
 local function activate()

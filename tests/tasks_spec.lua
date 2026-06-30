@@ -71,6 +71,12 @@ describe("ledger.tasks.templates", function()
     it("run-app templates launch the native app without tests", function()
       assert.equals("pnpm mobile ios", templates.resolve("mobile.run.ios", {}, ROOT).cmd)
       assert.equals("pnpm mobile android", templates.resolve("mobile.run.android", {}, ROOT).cmd)
+      assert.equals("pnpm mobile ios:staging", templates.resolve("mobile.run.ios.staging", {}, ROOT).cmd)
+      assert.equals("pnpm mobile staging-android", templates.resolve("mobile.run.android.staging", {}, ROOT).cmd)
+      -- desktop production runs the prebuilt bundle, building via build:js only if missing
+      local prod = templates.resolve("desktop.run.prod", {}, ROOT).cmd
+      assert.is_truthy(prod:find("build:js", 1, true))
+      assert.is_truthy(prod:find("start:prod", 1, true))
     end)
 
     it("detox test maps configs to scripts and applies scope", function()
