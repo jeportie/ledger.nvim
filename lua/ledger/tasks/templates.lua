@@ -190,9 +190,12 @@ M.templates = {
     platform = "desktop",
     kind = "run",
     cwd = "repo",
-    -- run the prebuilt Electron bundle; build it with build:js (NOT build:testing,
-    -- the Playwright TESTING=1 bundle) only when none exists yet, so the two don't clash.
-    cmd = "[ -f apps/ledger-live-desktop/.webpack/main.bundle.js ] || pnpm desktop build:js; pnpm desktop start:prod",
+    -- always build:js then run: the on-disk .webpack bundle is whatever ran last
+    -- (dev/testing/prod share one path), and a dev bundle pins the window to the
+    -- :8080 dev server → white screen. build:js is minified, __DEV__=false, loads
+    -- the renderer from file://. NB: this overwrites the build:testing bundle —
+    -- rebuild that before Playwright e2e.
+    cmd = "pnpm desktop build:js && pnpm desktop start:prod",
   },
   {
     id = "desktop.pw.setup",
@@ -271,6 +274,16 @@ M.templates = {
     kind = "daemon",
     cwd = "repo",
     cmd = "pnpm dev:llm",
+    daemon = true,
+  },
+  {
+    id = "mobile.sim.logs",
+    label = "Mobile · iOS simulator logs",
+    platform = "mobile",
+    kind = "daemon",
+    cwd = "repo",
+    -- stream the booted sim's app log (unbounded → daemon; kill via the proc card)
+    cmd = "xcrun simctl spawn booted log stream --level info --style compact --color none --predicate 'process == \"ledgerlivemobile\"'",
     daemon = true,
   },
   {

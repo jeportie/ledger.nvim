@@ -102,7 +102,8 @@ local function refresh_statuses()
     config = state.config,
     desktop_build = state.desktop_build,
   })
-  state.procs = proc.for_platform(state.platform, state.platform_flag)
+  state.procs =
+    proc.apply_task_liveness(proc.for_platform(state.platform, state.platform_flag), require("ledger.tasks").is_running)
   state.watching = (state.watch_mode == "on-save") or (state.watch_mode == "nx" and tasks.is_running("shared.nx.watch"))
   local alive = {}
   for _, p in ipairs(state.procs) do
@@ -206,7 +207,8 @@ local function refresh_runtime()
   end
   local proc = require("ledger.builder.proc")
   local tasks = require("ledger.tasks")
-  state.procs = proc.for_platform(state.platform, state.platform_flag)
+  state.procs =
+    proc.apply_task_liveness(proc.for_platform(state.platform, state.platform_flag), require("ledger.tasks").is_running)
   local running = require("ledger.builder.running").running_steps(state.steps)
   local finished = false
   for _, step in ipairs(state.steps or {}) do
@@ -485,9 +487,18 @@ function M.run_app()
   end
   menus.open_menu("Run app", labels, nil, function(choice)
     local id = by_label[choice]
-    if id then
-      M.run_template(id)
+    if not id then
+      return
     end
+    -- don't relaunch an already-running daemon (e.g. dev:lld on :8080 → EADDRINUSE)
+    for _, p in ipairs(state.procs or {}) do
+      local e = require("ledger.builder.proc").by_name[p.name]
+      if e and e.start == id and p.alive then
+        vim.notify("Builder: " .. p.label .. " is already running", vim.log.levels.INFO)
+        return
+      end
+    end
+    M.run_template(id)
   end)
 end
 

@@ -23,7 +23,7 @@ describe("ledger.builder.proc", function()
   describe("detect_cmd (pure)", function()
     it("builds a port probe", function()
       assert.equals("lsof -ti:8081 -sTCP:LISTEN", proc.detect_cmd("metro"))
-      assert.equals("lsof -ti:8099 -sTCP:LISTEN", proc.detect_cmd("bridge"))
+      assert.equals("lsof -ti:8080 -sTCP:LISTEN", proc.detect_cmd("dev_lld")) -- rspack dev server
     end)
 
     it("builds a docker probe", function()
@@ -37,8 +37,30 @@ describe("ledger.builder.proc", function()
       )
     end)
 
-    it("returns nil for managed-only entries", function()
-      assert.is_nil(proc.detect_cmd("dev_lld"))
+    it("returns nil for managed/task-only entries (no shell probe)", function()
+      -- detox bridge port is random → detected via the test task, not a probe
+      assert.is_nil(proc.detect_cmd("bridge"))
+      assert.equals("mobile.detox.test", proc.by_name.bridge.task)
+    end)
+  end)
+
+  describe("apply_task_liveness (pure)", function()
+    it("a `task` proc is alive iff its task runs; others untouched", function()
+      local procs = proc.apply_task_liveness(
+        { { name = "bridge", alive = false }, { name = "metro", alive = false } },
+        function(id)
+          return id == "mobile.detox.test"
+        end
+      )
+      assert.is_true(procs[1].alive) -- bridge: its task is running
+      assert.is_false(procs[2].alive) -- metro: no task field → untouched
+      local none = proc.apply_task_liveness({ { name = "bridge", alive = false } }, function()
+        return false
+      end)
+      assert.is_false(none[1].alive)
+    end)
+    it("ios_sim streams its logs via mobile.sim.logs", function()
+      assert.equals("mobile.sim.logs", proc.by_name.ios_sim.start)
     end)
   end)
 

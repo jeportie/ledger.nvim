@@ -73,10 +73,17 @@ describe("ledger.tasks.templates", function()
       assert.equals("pnpm mobile android", templates.resolve("mobile.run.android", {}, ROOT).cmd)
       assert.equals("pnpm mobile ios:staging", templates.resolve("mobile.run.ios.staging", {}, ROOT).cmd)
       assert.equals("pnpm mobile staging-android", templates.resolve("mobile.run.android.staging", {}, ROOT).cmd)
-      -- desktop production runs the prebuilt bundle, building via build:js only if missing
-      local prod = templates.resolve("desktop.run.prod", {}, ROOT).cmd
-      assert.is_truthy(prod:find("build:js", 1, true))
-      assert.is_truthy(prod:find("start:prod", 1, true))
+      -- desktop production always rebuilds the prod bundle (build:js), then runs it
+      assert.equals(
+        "pnpm desktop build:js && pnpm desktop start:prod",
+        templates.resolve("desktop.run.prod", {}, ROOT).cmd
+      )
+      -- iOS simulator log stream is a daemon scoped to the app process
+      local simlogs = templates.resolve("mobile.sim.logs", {}, ROOT)
+      assert.is_true(simlogs.daemon)
+      assert.is_truthy(simlogs.cmd:find("simctl", 1, true))
+      assert.is_truthy(simlogs.cmd:find("log stream", 1, true))
+      assert.is_truthy(simlogs.cmd:find("ledgerlivemobile", 1, true))
     end)
 
     it("detox test maps configs to scripts and applies scope", function()
