@@ -493,18 +493,74 @@ describe("ledger.builder.ui.panes", function()
     assert.is_truthy(s:find("sub-step log line", 1, true))
   end)
 
-  -- regression: the Run-tests row has no step/sub, so current_log_id must fall
-  -- through to last_started (a focused row with no log id must not return nil)
-  it("current_log_id falls through to last_started on the Run-tests row", function()
-    require("ledger.tasks").last_started = "desktop.pw.run"
-    local steps = require("ledger.builder.pipeline").steps("desktop")
+  -- a focused process shows ITS OWN task log, never another task's
+  it("current_log_id maps a focused process to its own start template", function()
+    require("ledger.tasks").last_started = "mobile.detox.test" -- a different task ran last
     local st = vim.tbl_extend("force", {}, fake, {
-      platform = "desktop",
-      steps = steps,
-      show_substeps = false,
-      focus = { col = "pipeline", idx = #steps + 1 }, -- the Run-tests row (last item)
+      procs = { { name = "metro", label = "Metro", alive = true, port = 8081 } },
+      focus = { col = "processes", idx = 1 },
     })
-    assert.equals("desktop.pw.run", panes.current_log_id(st))
+    assert.equals("mobile.metro", panes.current_log_id(st)) -- metro's log, not last_started
+  end)
+
+  -- a focused process with no managed task (probe-only) shows nothing
+  it("current_log_id returns nil for a focused logless process (no bleed)", function()
+    require("ledger.tasks").last_started = "mobile.detox.test"
+    local st = vim.tbl_extend("force", {}, fake, {
+      procs = { { name = "speculos", label = "Speculos", alive = true } },
+      focus = { col = "processes", idx = 1 },
+    })
+    assert.is_nil(panes.current_log_id(st)) -- speculos has no start template
+  end)
+
+  -- a task-tracked card (the detox bridge) shows the log of the task it lives in
+  it("current_log_id maps a focused task-based process to its task log", function()
+    local proc = require("ledger.builder.proc")
+    proc.by_name._test_bridge = { name = "_test_bridge", task = "mobile.detox.test" }
+    local st = vim.tbl_extend("force", {}, fake, {
+      procs = { { name = "_test_bridge", alive = true } },
+      focus = { col = "processes", idx = 1 },
+    })
+    local id = panes.current_log_id(st)
+    proc.by_name._test_bridge = nil -- cleanup the injected registry entry
+    assert.equals("mobile.detox.test", id)
+  end)
+
+  -- the Run-tests row shows the TEST task's log, not last_started (which could be
+  -- Metro or a build that ran afterwards)
+  it("current_log_id maps the Run-tests row to the test task, not last_started", function()
+    require("ledger.tasks").last_started = "mobile.metro" -- metro ran last, but isn't the test
+    local function runtests_log(platform, flag)
+      local steps = require("ledger.builder.pipeline").steps(platform, { platform_flag = flag })
+      local st = vim.tbl_extend("force", {}, fake, {
+        platform = platform,
+        platform_flag = flag,
+        steps = steps,
+        show_substeps = false,
+        focus = { col = "pipeline", idx = #steps + 1 }, -- the Run-tests row (last item)
+      })
+      return panes.current_log_id(st)
+    end
+    assert.equals("mobile.detox.test", runtests_log("mobile", "ios"))
+    assert.equals("desktop.pw.run", runtests_log("desktop"))
+  end)
+
+  -- focused_task_id backs both the Logs panel and the stop (x) action
+  it("focused_task_id resolves the focused pipeline item (nil off-pipeline)", function()
+    local steps = require("ledger.builder.pipeline").steps("mobile", { platform_flag = "ios" })
+    local base = { platform = "mobile", platform_flag = "ios", steps = steps, show_substeps = false }
+    local function focus(idx)
+      return vim.tbl_extend("force", {}, fake, base, { focus = { col = "pipeline", idx = idx } })
+    end
+    assert.equals(steps[1].template, panes.focused_task_id(focus(1))) -- first build step
+    assert.equals("mobile.detox.test", panes.focused_task_id(focus(#steps + 1))) -- Run-tests row
+    local proc = vim.tbl_extend(
+      "force",
+      {},
+      fake,
+      { procs = { { name = "metro" } }, focus = { col = "processes", idx = 1 } }
+    )
+    assert.is_nil(panes.focused_task_id(proc)) -- a focused process is not a pipeline task
   end)
 
   it("Logs panel shows the running test's log when the Run-tests row is focused", function()
@@ -796,5 +852,31 @@ describe("ledger.builder.ui.hl + loader", function()
     assert.has_no.errors(function()
       require("ledger.builder.ui.loader")
     end)
+  end)
+end)
+
+describe("ledger.builder._enclosing_export", function()
+  local builder = require("ledger.builder")
+  -- mirrors the real swap.other.ts layout: a parameterized title inside an exported
+  -- function that a .spec.ts imports + calls.
+  local lines = {
+    "export function runSwapWithoutAccountTest() {", -- 1
+    "  it('swap without account', () => {});", -- 2
+    "}", -- 3
+    "export function runSwapDiscreetModeTest(", -- 4
+    "  account,", -- 5
+    ") {", -- 6
+    "  it('Checks if the amount is hidden in the asset drawer', () => {});", -- 7
+    "}", -- 8
+  }
+  it("returns the nearest export at/above a line", function()
+    assert.equals("runSwapDiscreetModeTest", builder._enclosing_export(lines, 7))
+    assert.equals("runSwapWithoutAccountTest", builder._enclosing_export(lines, 2))
+    assert.equals("runSwapDiscreetModeTest", builder._enclosing_export(lines, 4)) -- on the export line
+  end)
+  it("handles export const / async function, nil when none", function()
+    assert.equals("foo", builder._enclosing_export({ "export const foo = () => {", "it('x')" }, 2))
+    assert.equals("bar", builder._enclosing_export({ "export async function bar() {", "it('y')" }, 2))
+    assert.is_nil(builder._enclosing_export({ "const localOnly = 1", "it('z')" }, 2))
   end)
 end)

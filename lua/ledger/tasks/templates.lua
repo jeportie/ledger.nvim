@@ -30,27 +30,24 @@ local function detox_build_cmd(opts)
   return prefix .. "pnpm mobile e2e:build -c " .. cfg
 end
 
--- Map a detox configuration to its e2e:mobile script (iOS debug needs Metro;
--- iOS/Android release embed the bundle; Android debug is broken locally).
-local DETOX_SCRIPT = {
-  ["ios.sim.debug"] = "test:ios:debug",
-  ["ios.sim.release"] = "test:ios",
-  ["android.emu.release"] = "test:android",
-}
-
--- Detox test command. `opts.config` picks the script; `opts.scope` ("all" |
--- "file" | "name") + `opts.spec` / `opts.name` build the Jest filter.
+-- Detox test command. Run the leaf `detox test` directly from e2e/mobile so a
+-- single shell parses the args (detox itself escapes spaces before spawning
+-- jest); the old nested `pnpm … -- …` hops stripped the `-t "name"` quoting.
+-- `opts.scope` ("all" | "file" | "name") + `opts.spec` / `opts.name`:
+--   * spec (a jest-rootDir-relative path) is passed POSITIONALLY — detox/jest
+--     treat it as the test-path pattern, scoping the run to ONE file (one app
+--     launch). NB: jest's `--testPathPattern` flag was removed in jest 30.
+--   * name adds `-t "<name>"`; pairing it with spec means jest only loads that
+--     file (otherwise detox relaunches the app for every spec file and skips).
 local function detox_test_cmd(opts)
   local cfg = opts.config or "ios.sim.debug"
-  local script = DETOX_SCRIPT[cfg]
-  local base = script and ("pnpm e2e:mobile " .. script) or ("pnpm e2e:mobile test:detox -- -c " .. cfg)
+  local base = "pnpm detox test --configuration " .. cfg
   local scope = opts.scope or "all"
-  if script then
-    if scope == "file" and opts.spec and opts.spec ~= "" then
-      base = base .. " -- --testPathPattern " .. opts.spec
-    elseif scope == "name" and opts.name and opts.name ~= "" then
-      base = base .. ' -- -t "' .. opts.name .. '"'
-    end
+  if (scope == "file" or scope == "name") and opts.spec and opts.spec ~= "" then
+    base = base .. " " .. opts.spec
+  end
+  if scope == "name" and opts.name and opts.name ~= "" then
+    base = base .. ' -t "' .. opts.name .. '"'
   end
   return base
 end
@@ -214,7 +211,9 @@ M.templates = {
     platform = "mobile",
     kind = "daemon",
     cwd = "repo",
-    cmd = "pnpm dev:llm",
+    -- start the bundler directly (react-native start); `pnpm dev:llm` = `nx run
+    -- live-mobile:start`, which drags in nx's dependsOn and rebuilds libs.
+    cmd = "pnpm mobile start",
     daemon = true,
   },
   {
@@ -230,7 +229,7 @@ M.templates = {
     label = "Mobile · Detox test",
     platform = "mobile",
     kind = "test",
-    cwd = "repo",
+    cwd = "e2e_mobile",
     cmd = detox_test_cmd,
   },
   {

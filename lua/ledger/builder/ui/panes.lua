@@ -590,22 +590,43 @@ function M.process_popup_content(info)
   return lines
 end
 
--- The task id whose log the panel shows: a pinned ad-hoc/watch log (st.log_id),
--- else the focused pipeline item's task (step or sub-step), else the last started.
+-- The task id of the focused PIPELINE item: a step's template, a sub-step's task,
+-- or the platform's test task for the Run-tests row. nil when the Processes column
+-- is focused or the item carries no task. Used by the Logs panel + the stop (x) action.
+function M.focused_task_id(st)
+  if not (st.focus and st.focus.col == "pipeline") then
+    return nil
+  end
+  local it = M.pipeline_items(st)[st.focus.idx]
+  if not it then
+    return nil
+  end
+  if it.kind == "runtests" then
+    -- the test task (not last_started, which could be Metro or a later build)
+    return st.platform == "desktop" and "desktop.pw.run" or "mobile.detox.test"
+  end
+  return (it.step and it.step.template) or (it.sub and it.sub.task_id) or nil
+end
+
+-- The task id whose log the panel shows: a focused process's own log, else a pinned
+-- ad-hoc/watch log (st.log_id), else the focused pipeline item's task, else last started.
 function M.current_log_id(st)
+  -- a focused process shows ITS OWN log: a start template's output (metro →
+  -- "mobile.metro"; speculos/sim → their log stream) or, for a task-tracked card
+  -- like the detox bridge, the managed task it lives in (mobile.detox.test, whose
+  -- output carries the [E2E Bridge Server] lines). A process with neither shows
+  -- nothing (never bleed another task's log).
+  if st.focus and st.focus.col == "processes" then
+    local p = (st.procs or {})[st.focus.idx]
+    local e = p and require("ledger.builder.proc").by_name[p.name]
+    return e and (e.start or e.task) or nil
+  end
   if st.log_id then
     return st.log_id
   end
-  if st.focus and st.focus.col == "pipeline" then
-    local it = M.pipeline_items(st)[st.focus.idx]
-    if it then
-      -- a focused item with a task shows its log; one without (the Run-tests
-      -- row) falls through to last_started below — do NOT return nil here.
-      local id = (it.step and it.step.template) or (it.sub and it.sub.task_id)
-      if id then
-        return id
-      end
-    end
+  local focused = M.focused_task_id(st)
+  if focused then
+    return focused
   end
   return require("ledger.tasks").last_started
 end
@@ -802,7 +823,7 @@ function M.help_shortcuts()
     row("t", "build a project", "current file / picked / filter"),
     row("z", "fold sub-steps", "show / hide per-project rebuilds"),
     row("B", "build", "→ desktop build:* / detox e2e:build"),
-    row("x / s", "kill / start focused process"),
+    row("x / s", "stop step·test / start process", "x stops a running build/test, else kills the process"),
     row("e", "env dropdown", "desktop: build/MOCK · mobile: detox config"),
     row("p", "toggle PWDEBUG (desktop)"),
     row("d", "Speculos device dropdown"),
