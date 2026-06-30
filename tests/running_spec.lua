@@ -55,3 +55,52 @@ describe("ledger.builder.running.running_steps", function()
     assert.same({}, scan(desktop, ""))
   end)
 end)
+
+describe("ledger.builder.running TTL memo", function()
+  local ios = pipeline.steps("mobile", { platform_flag = "ios" })
+
+  after_each(function()
+    running._set_default_runner(nil) -- restore the real `ps` scan + clear memo
+  end)
+
+  it("reuses the listing within the window (one ps scan for two calls)", function()
+    local calls = 0
+    running._set_default_runner(function()
+      calls = calls + 1
+      return "pnpm mobile e2e:build -c ios.sim.debug\n"
+    end)
+    -- both calls take the memoised default path (no runner arg)
+    local r1 = running.running_steps(ios)
+    local r2 = running.running_steps(ios)
+    assert.equals(1, calls) -- second call served from the memo
+    assert.is_true(r1.build)
+    assert.is_true(r2.build) -- same listing → same result
+  end)
+
+  it("re-scans after the memo is invalidated", function()
+    local calls = 0
+    running._set_default_runner(function()
+      calls = calls + 1
+      return ""
+    end)
+    running.running_steps(ios)
+    running.invalidate()
+    running.running_steps(ios)
+    assert.equals(2, calls) -- invalidation forces a fresh scan
+  end)
+
+  it("an explicitly-injected runner always bypasses the memo", function()
+    local calls = 0
+    -- prime the memo via the default path
+    running._set_default_runner(function()
+      return ""
+    end)
+    running.running_steps(ios)
+    -- an injected runner must still run (existing unit tests depend on this)
+    running.running_steps(ios, function()
+      calls = calls + 1
+      return "pnpm mobile e2e:build -c ios.sim.debug\n"
+    end)
+    assert.equals(1, calls)
+  end)
+end)
