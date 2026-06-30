@@ -589,14 +589,24 @@ end
 -- The task id whose log the panel shows: a pinned ad-hoc/watch log (st.log_id),
 -- else the focused pipeline item's task (step or sub-step), else the last started.
 function M.current_log_id(st)
+  -- a focused process shows ITS OWN task log (metro → "mobile.metro"); a process
+  -- with no managed task shows nothing (never bleed another task's log).
+  if st.focus and st.focus.col == "processes" then
+    local p = (st.procs or {})[st.focus.idx]
+    local e = p and require("ledger.builder.proc").by_name[p.name]
+    return e and e.start or nil
+  end
   if st.log_id then
     return st.log_id
   end
   if st.focus and st.focus.col == "pipeline" then
     local it = M.pipeline_items(st)[st.focus.idx]
     if it then
-      -- a focused item with a task shows its log; one without (the Run-tests
-      -- row) falls through to last_started below — do NOT return nil here.
+      if it.kind == "runtests" then
+        -- the Run-tests row shows the test task's log (not last_started, which
+        -- could be Metro or a build that ran afterwards)
+        return st.platform == "desktop" and "desktop.pw.run" or "mobile.detox.test"
+      end
       local id = (it.step and it.step.template) or (it.sub and it.sub.task_id)
       if id then
         return id

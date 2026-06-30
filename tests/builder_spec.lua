@@ -493,18 +493,43 @@ describe("ledger.builder.ui.panes", function()
     assert.is_truthy(s:find("sub-step log line", 1, true))
   end)
 
-  -- regression: the Run-tests row has no step/sub, so current_log_id must fall
-  -- through to last_started (a focused row with no log id must not return nil)
-  it("current_log_id falls through to last_started on the Run-tests row", function()
-    require("ledger.tasks").last_started = "desktop.pw.run"
-    local steps = require("ledger.builder.pipeline").steps("desktop")
+  -- a focused process shows ITS OWN task log, never another task's
+  it("current_log_id maps a focused process to its own start template", function()
+    require("ledger.tasks").last_started = "mobile.detox.test" -- a different task ran last
     local st = vim.tbl_extend("force", {}, fake, {
-      platform = "desktop",
-      steps = steps,
-      show_substeps = false,
-      focus = { col = "pipeline", idx = #steps + 1 }, -- the Run-tests row (last item)
+      procs = { { name = "metro", label = "Metro", alive = true, port = 8081 } },
+      focus = { col = "processes", idx = 1 },
     })
-    assert.equals("desktop.pw.run", panes.current_log_id(st))
+    assert.equals("mobile.metro", panes.current_log_id(st)) -- metro's log, not last_started
+  end)
+
+  -- a focused process with no managed task (probe-only) shows nothing
+  it("current_log_id returns nil for a focused logless process (no bleed)", function()
+    require("ledger.tasks").last_started = "mobile.detox.test"
+    local st = vim.tbl_extend("force", {}, fake, {
+      procs = { { name = "speculos", label = "Speculos", alive = true } },
+      focus = { col = "processes", idx = 1 },
+    })
+    assert.is_nil(panes.current_log_id(st)) -- speculos has no start template
+  end)
+
+  -- the Run-tests row shows the TEST task's log, not last_started (which could be
+  -- Metro or a build that ran afterwards)
+  it("current_log_id maps the Run-tests row to the test task, not last_started", function()
+    require("ledger.tasks").last_started = "mobile.metro" -- metro ran last, but isn't the test
+    local function runtests_log(platform, flag)
+      local steps = require("ledger.builder.pipeline").steps(platform, { platform_flag = flag })
+      local st = vim.tbl_extend("force", {}, fake, {
+        platform = platform,
+        platform_flag = flag,
+        steps = steps,
+        show_substeps = false,
+        focus = { col = "pipeline", idx = #steps + 1 }, -- the Run-tests row (last item)
+      })
+      return panes.current_log_id(st)
+    end
+    assert.equals("mobile.detox.test", runtests_log("mobile", "ios"))
+    assert.equals("desktop.pw.run", runtests_log("desktop"))
   end)
 
   it("Logs panel shows the running test's log when the Run-tests row is focused", function()
