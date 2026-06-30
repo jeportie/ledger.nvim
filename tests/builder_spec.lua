@@ -836,3 +836,29 @@ describe("ledger.builder.ui.hl + loader", function()
     end)
   end)
 end)
+
+describe("ledger.builder._enclosing_export", function()
+  local builder = require("ledger.builder")
+  -- mirrors the real swap.other.ts layout: a parameterized title inside an exported
+  -- function that a .spec.ts imports + calls.
+  local lines = {
+    "export function runSwapWithoutAccountTest() {", -- 1
+    "  it('swap without account', () => {});", -- 2
+    "}", -- 3
+    "export function runSwapDiscreetModeTest(", -- 4
+    "  account,", -- 5
+    ") {", -- 6
+    "  it('Checks if the amount is hidden in the asset drawer', () => {});", -- 7
+    "}", -- 8
+  }
+  it("returns the nearest export at/above a line", function()
+    assert.equals("runSwapDiscreetModeTest", builder._enclosing_export(lines, 7))
+    assert.equals("runSwapWithoutAccountTest", builder._enclosing_export(lines, 2))
+    assert.equals("runSwapDiscreetModeTest", builder._enclosing_export(lines, 4)) -- on the export line
+  end)
+  it("handles export const / async function, nil when none", function()
+    assert.equals("foo", builder._enclosing_export({ "export const foo = () => {", "it('x')" }, 2))
+    assert.equals("bar", builder._enclosing_export({ "export async function bar() {", "it('y')" }, 2))
+    assert.is_nil(builder._enclosing_export({ "const localOnly = 1", "it('z')" }, 2))
+  end)
+end)

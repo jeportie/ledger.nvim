@@ -776,15 +776,57 @@ local function target_label()
   return state.platform == "desktop" and "desktop" or state.platform_flag
 end
 
+-- pure (testable): the nearest exported symbol at/above `line` in `lines` —
+-- `export [async] function NAME` or `export const NAME`. Maps a parameterized test
+-- title (defined in a shared helper) to the function a .spec.ts imports + calls.
+function M._enclosing_export(lines, line)
+  for i = math.min(line, #lines), 1, -1 do
+    local s = lines[i] or ""
+    local name = s:match("^%s*export%s+function%s+([%w_]+)")
+      or s:match("^%s*export%s+async%s+function%s+([%w_]+)")
+      or s:match("^%s*export%s+const%s+([%w_]+)")
+    if name then
+      return name
+    end
+  end
+  return nil
+end
+
+-- Resolve a picked occurrence { file=abs, line, rel, is_spec } to the jest-rootDir-
+-- relative .spec.ts to run: the spec itself, else the spec that calls the title's
+-- enclosing exported function. nil when it can't be pinned (caller falls back).
+local function resolve_spec(occ, base, specs_dir)
+  if not occ then
+    return nil
+  end
+  if occ.is_spec then
+    return occ.rel
+  end
+  local ok, lines = pcall(vim.fn.readfile, occ.file)
+  if not ok or type(lines) ~= "table" then
+    return nil
+  end
+  local sym = M._enclosing_export(lines, occ.line)
+  if not sym then
+    return nil
+  end
+  local hit
+  rg_lines({ "rg", "-l", "-F", sym, "--glob", "*.spec.ts", specs_dir }, function(l)
+    hit = hit or l
+  end)
+  return hit and hit:gsub("^" .. vim.pesc(base .. "/"), "") or nil
+end
+
 -- Pick by test NAME: it()/test() titles in the target's specs. Multiline -U so
 -- desktop Playwright (title on the line after `test(`) is captured too.
 local function pick_test_name()
   local dir, base = specs_root()
-  local names, seen, file_of = {}, {}, {}
-  -- -H forces the filename prefix (even for a single match) so we can scope the
-  -- run to the ONE spec that holds the title (else detox relaunches per file).
-  rg_lines({ "rg", "-U", "-H", "-o", "-r", "$1", [[(?:it|test)\(\s*['"`]([^'"`]+)]], dir }, function(line)
-    local file, t = line:match("^([^:]+):(.*)$")
+  local names, seen, occ = {}, {}, {}
+  -- -H -n give `file:line:title` so a title can be pinned to ONE spec (else detox
+  -- relaunches the app per spec file). Titles defined in shared helpers are mapped
+  -- to their calling .spec.ts on pick (resolve_spec).
+  rg_lines({ "rg", "-U", "-H", "-n", "-o", "-r", "$1", [[(?:it|test)\(\s*['"`]([^'"`]+)]], dir }, function(line)
+    local file, lno, t = line:match("^([^:]+):(%d+):(.*)$")
     if not file then
       return
     end
@@ -797,11 +839,9 @@ local function pick_test_name()
     if not seen[t] then
       seen[t] = true
       names[#names + 1] = t
-      if is_spec then
-        file_of[t] = rel -- scope the run to this spec (one app launch)
-      end
-    elseif is_spec and not file_of[t] then
-      file_of[t] = rel -- prefer a real spec over a helper occurrence of the title
+      occ[t] = { file = file, line = tonumber(lno), rel = rel, is_spec = is_spec }
+    elseif is_spec and occ[t] and not occ[t].is_spec then
+      occ[t] = { file = file, line = tonumber(lno), rel = rel, is_spec = true } -- prefer a real spec
     end
   end)
   table.sort(names)
@@ -817,27 +857,33 @@ local function pick_test_name()
         end
       end)
     else
-      -- pair the title with its file so jest loads only that spec (one launch)
-      do_run_test({ scope = "name", name = sel, spec = file_of[sel] })
+      -- pin to the spec that runs this title so jest loads only that file (one launch)
+      do_run_test({ scope = "name", name = sel, spec = resolve_spec(occ[sel], base, dir) })
     end
   end)
 end
 
--- Pick by TICKET: B2CQA-#### referenced in the target's specs.
+-- Pick by TICKET: B2CQA-#### referenced in the target's specs. A ticket maps to a
+-- scenario = one spec file (tmsLinks), so run the whole file (scope "file");
+-- `-t <ticket>` never matched a jest test name. Tickets found in a shared helper
+-- resolve to the calling .spec.ts.
 local function pick_ticket()
   local dir, base = specs_root()
-  local tickets, seen, file_of = {}, {}, {}
-  rg_lines({ "rg", "-H", "-o", "B2CQA-\\d+", dir }, function(line)
-    local file, rest = line:match("^([^:]+):(.*)$")
+  local tickets, seen, occ = {}, {}, {}
+  rg_lines({ "rg", "-H", "-n", "-o", "B2CQA-\\d+", dir }, function(line)
+    local file, lno, rest = line:match("^([^:]+):(%d+):(.*)$")
     if not file then
       return
     end
     local rel = file:gsub("^" .. vim.pesc(base .. "/"), "")
+    local is_spec = rel:match("%.spec%.ts$") ~= nil
     for tok in rest:gmatch("B2CQA%-%d+") do
       if not seen[tok] then
         seen[tok] = true
         tickets[#tickets + 1] = tok
-        file_of[tok] = rel -- scope to the first spec referencing the ticket
+        occ[tok] = { file = file, line = tonumber(lno), rel = rel, is_spec = is_spec }
+      elseif is_spec and occ[tok] and not occ[tok].is_spec then
+        occ[tok] = { file = file, line = tonumber(lno), rel = rel, is_spec = true }
       end
     end
   end)
@@ -848,7 +894,7 @@ local function pick_ticket()
   end
   vim.ui.select(tickets, { prompt = "Ticket (" .. target_label() .. ")" }, function(sel)
     if sel then
-      do_run_test({ scope = "name", name = sel, spec = file_of[sel] })
+      do_run_test({ scope = "file", spec = resolve_spec(occ[sel], base, dir) })
     end
   end)
 end
