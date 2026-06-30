@@ -122,6 +122,22 @@ open -a Simulator 2>/dev/null
 echo "iOS Simulator ready (UDID $TARGET on iOS $SDK)."
 ]]
 
+-- Follow the running speculos container's docker logs. The e2e harness recreates
+-- speculos per scenario, so when the current container exits we re-attach to the
+-- next one — keeping a continuous view of what's happening in docker across the run.
+local SPECULOS_LOGS = [[
+while true; do
+  cid=$(docker ps -q --filter name=speculos | head -1)
+  if [ -n "$cid" ]; then
+    echo "── speculos $(docker inspect -f '{{.Name}}' "$cid" 2>/dev/null | sed 's#^/##') ($cid) ──"
+    docker logs -f "$cid" 2>&1
+    echo "── speculos container exited; waiting for the next ──"
+  else
+    sleep 1
+  fi
+done
+]]
+
 -- The matrix. Order is roughly pipeline order per platform.
 M.templates = {
   -- ── desktop ──────────────────────────────────────────────────────────────
@@ -293,7 +309,7 @@ M.templates = {
     kind = "daemon",
     cwd = "repo",
     -- follow the running speculos container's docker logs (unbounded → daemon)
-    cmd = 'cid=$(docker ps -q --filter name=speculos | head -1); if [ -z "$cid" ]; then echo \'no speculos container running\'; exit 0; fi; docker logs -f "$cid"',
+    cmd = SPECULOS_LOGS,
     daemon = true,
   },
   {
