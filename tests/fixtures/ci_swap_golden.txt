@@ -1,0 +1,18 @@
+Swap Bitcoin to Ethereum
+Swap Bitcoin to Litecoin
+Swap Bitcoin to Solana
+Swap Bitcoin to Tether USD
+Swap Ethereum to Bitcoin
+Swap Ethereum to Polkadot
+Swap Ethereum to Solana
+Swap Ethereum to Tether USD
+Swap Hedera to XRP
+Swap Solana to Bitcoin
+Swap Solana to Ethereum
+Swap Tether USD to Bitcoin
+Swap Tether USD to Ethereum
+Swap Tether USD to Solana
+Swap USD Coin to Bitcoin
+Swap USD Coin to Ethereum
+Swap XRP to Bitcoin
+Swap XRP to USD Coin
