@@ -367,12 +367,11 @@ function M.pipeline_content(st, inner_w)
       else
         bullet, bhl = "✶", "LedgerYellow0"
       end
-      -- clean leads with the broom icon and renders last (after Run-tests) behind a
-      -- blank, to read as the optional step; the real build steps are numbered 1..N.
+      -- clean leads with the broom icon and renders last (after Run-tests) so it
+      -- reads as the optional step; the real build steps are numbered 1..N.
       local lead
       if step.id == "clean" then
         lead = clean_icon
-        tbl[#tbl + 1] = {} -- separator above the optional clean action
       else
         num = num + 1
         lead = tostring(num)
