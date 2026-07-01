@@ -1225,9 +1225,14 @@ local function run_all_menu()
     return
   end
   local target = state.platform == "desktop" and "desktop" or state.platform_flag
-  menus.open_menu("run all (" .. target .. ")", { "Run all", "Clean + reinstall + run all" }, "Run all", function(c)
-    run_all(c == "Clean + reinstall + run all" and "clean" or "build")
-  end)
+  menus.open_menu(
+    "run all (" .. target .. ")",
+    { "Run all outdated steps", "Clean + reinstall + run all" },
+    "Run all outdated steps",
+    function(c)
+      run_all(c == "Clean + reinstall + run all" and "clean" or "build")
+    end
+  )
 end
 
 -- Is the Playwright browser installed? (single source of truth in panes)
