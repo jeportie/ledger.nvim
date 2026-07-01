@@ -29,6 +29,10 @@ local state = nil
 -- which sit above it, need to call it.
 local redraw
 
+-- Forward declaration: `load_history_log` is defined near the keymaps but
+-- install_callbacks (above it) wires it as the Stats history click handler.
+local load_history_log
+
 local menus = require("ledger.builder.menus") -- open_menu / pick_project
 local watch = require("ledger.builder.watch") -- watch modes + per-project sub-steps
 
@@ -1186,6 +1190,13 @@ local function install_callbacks()
     sync_focus()
     activate()
   end
+  -- Clicking a Stats "History" row loads that run's saved log. `i` indexes the
+  -- same target-filtered recent(8) list panes.stats_history renders.
+  state.on_history_pick = function(i)
+    local target = state.platform == "desktop" and "desktop" or state.platform_flag
+    local recent = require("ledger.builder.history").recent(8, nil, target)
+    load_history_log(recent[i])
+  end
 end
 
 -- ── keymaps ───────────────────────────────────────────────────────────────────
@@ -1273,6 +1284,62 @@ local function run_tests_gated()
     return
   end
   M.run_test()
+end
+
+-- ── reopen a past run's log from history ─────────────────────────────────────
+
+-- A stable synthetic task id for a history entry, so re-picking the same run
+-- reuses its injected record instead of piling up duplicates.
+local function history_task_id(entry)
+  local safe = tostring(entry.label or "run"):gsub("[^%w]", "_")
+  return "history:" .. tostring(entry.time or 0) .. ":" .. safe
+end
+
+-- Load a history entry's SAVED log into the Logs pane: read the sidecar, inject
+-- it under a synthetic pinned id, pin + switch to Logs, redraw. Shared by the
+-- `L` picker and the clickable Stats history rows.
+function load_history_log(entry)
+  if not entry then
+    return
+  end
+  local history = require("ledger.builder.history")
+  local lines = history.log_lines(entry)
+  if #lines == 0 then
+    vim.notify("Builder: no saved log for this run", vim.log.levels.WARN)
+    return
+  end
+  local id = history_task_id(entry)
+  require("ledger.tasks").inject(id, lines, entry.code)
+  state.log_id = id -- pin it (survives until navigation unpins)
+  state.bottom = "logs"
+  state.log_offset = 0
+  redraw("all")
+end
+
+-- The `L` action: pick from the recent runs, then load the chosen run's log.
+local function open_log_history()
+  local history = require("ledger.builder.history")
+  local recent = history.recent(20)
+  if #recent == 0 then
+    vim.notify("Builder: no run history yet", vim.log.levels.INFO)
+    return
+  end
+  -- newest first in the picker, labelled "HH:MM ✓ label" (mirrors the Stats pane)
+  local choices, by_choice = {}, {}
+  for i = #recent, 1, -1 do
+    local e = recent[i]
+    local mark = e.code == 0 and "✓" or "✗"
+    local label = os.date("%H:%M ", e.time) .. mark .. " " .. (e.label or "?")
+    -- de-dupe identical labels (same minute + label) so each choice maps to one entry
+    while by_choice[label] do
+      label = label .. " "
+    end
+    choices[#choices + 1] = label
+    by_choice[label] = e
+  end
+  menus.open_menu("Run history", choices, nil, function(choice)
+    load_history_log(by_choice[choice])
+  end)
 end
 
 -- Toggle the Nx watcher daemon (keeps the live libs rebuilt on change).
@@ -1440,6 +1507,7 @@ local function set_keymaps()
   map("e", pick_env)
   map("d", pick_device)
   map("A", run_all_menu)
+  map("L", open_log_history)
   -- nx.nvim launcher: hide the Builder, then open its Telescope picker to run an
   -- arbitrary nx target. nx.nvim runs it in a :terminal — no status/log feedback
   -- here (it captures nothing); the pipeline keeps tracking real builds via .nx.

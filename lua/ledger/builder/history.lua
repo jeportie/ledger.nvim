@@ -2,8 +2,10 @@
 --
 -- A small persisted log of build/test runs that feeds the Builder dashboard's
 -- Stats pane (HISTORY table, BUILD-TIME graph, PASS-RATE bar). Entries:
---   { time=<os.time>, label, kind="build"|"test"|..., code, duration }
--- Persisted as JSON under stdpath('data'); capped to MAX entries.
+--   { time=<os.time>, label, kind="build"|"test"|..., code, duration, log? }
+-- Persisted as JSON under stdpath('data'); capped to MAX entries. Each entry
+-- may carry a `log` path pointing at a sidecar file (under the log dir) holding
+-- that run's captured output, so a past run's full log survives an nvim restart.
 
 local M = {}
 
@@ -11,6 +13,11 @@ local MAX = 100
 
 local function path()
   return vim.fn.stdpath("data") .. "/ledger_builder_history.json"
+end
+
+-- Directory holding the per-run sidecar log files.
+local function log_dir()
+  return vim.fn.stdpath("data") .. "/ledger_builder_logs"
 end
 
 -- in-memory cache (loaded lazily)
@@ -41,7 +48,33 @@ local function save()
   end
 end
 
--- Record a finished run. Returns the stored entry.
+-- Write a run's captured output to a sidecar file and return its path (nil on
+-- empty input). The name is `<time>-<sanitized-id>.log`; the id's non-alphanumerics
+-- collapse to `_` so any task key is filesystem-safe.
+function M.write_log(time, id, lines)
+  if not lines or #lines == 0 then
+    return nil
+  end
+  local dir = log_dir()
+  vim.fn.mkdir(dir, "p")
+  local safe = tostring(id or "task"):gsub("[^%w]", "_")
+  local p = dir .. "/" .. tostring(time or os.time()) .. "-" .. safe .. ".log"
+  local ok = pcall(vim.fn.writefile, lines, p)
+  return ok and p or nil
+end
+
+-- Read back a stored entry's sidecar log; {} when absent or unreadable.
+function M.log_lines(entry)
+  local p = entry and entry.log
+  if not p or vim.fn.filereadable(p) ~= 1 then
+    return {}
+  end
+  local ok, lines = pcall(vim.fn.readfile, p)
+  return (ok and lines) or {}
+end
+
+-- Record a finished run. Returns the stored entry. `entry.log` (optional) is a
+-- sidecar path from M.write_log; entries without it stay valid (back-compat).
 function M.record(entry)
   local list = load()
   local e = {
@@ -51,10 +84,16 @@ function M.record(entry)
     code = entry.code,
     duration = entry.duration,
     platform = entry.platform, -- "desktop" | "ios" | "android" | nil
+    log = entry.log, -- sidecar log path (optional)
   }
   list[#list + 1] = e
+  -- Drop the oldest entries beyond MAX, deleting each evicted sidecar so the
+  -- log dir stays bounded (history is capped at MAX runs on disk too).
   while #list > MAX do
-    table.remove(list, 1)
+    local dropped = table.remove(list, 1)
+    if dropped and dropped.log then
+      pcall(vim.fn.delete, dropped.log)
+    end
   end
   save()
   return e
@@ -111,6 +150,10 @@ end
 
 function M._path()
   return path()
+end
+
+function M._log_dir()
+  return log_dir()
 end
 
 return M
