@@ -569,6 +569,22 @@ function M.run_app()
   end)
 end
 
+-- The single Allure report template for a platform: desktop → desktop.allure,
+-- everything else (mobile ios/android) → mobile.allure. Pure so it's unit-testable.
+function M.report_template_for(platform)
+  return platform == "desktop" and "desktop.allure" or "mobile.allure"
+end
+
+-- `O`: generate + open the e2e Allure report for the active platform. There's
+-- exactly one report per platform, so run it directly (no menu, manual only).
+function M.open_report()
+  if not state.root then
+    return
+  end
+  M.run_template(M.report_template_for(state.platform))
+  vim.notify("Builder: opening Allure report…")
+end
+
 local function activate()
   if not state.root then
     return
@@ -1393,6 +1409,9 @@ local function set_keymaps()
   end)
   map("o", function()
     M.run_app()
+  end)
+  map("O", function()
+    M.open_report()
   end)
   -- tests run from the navigable "Run tests" pipeline row (j to it, then <CR>)
   map("w", watch.menu)
