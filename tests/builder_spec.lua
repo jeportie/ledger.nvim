@@ -920,6 +920,14 @@ describe("ledger.builder run-app dispatch", function()
   end)
 end)
 
+describe("ledger.builder open-report dispatch", function()
+  local builder = require("ledger.builder")
+  it("maps a platform to its single Allure report template", function()
+    assert.equals("desktop.allure", builder.report_template_for("desktop"))
+    assert.equals("mobile.allure", builder.report_template_for("mobile"))
+  end)
+end)
+
 describe("ledger.builder._enclosing_export", function()
   local builder = require("ledger.builder")
   -- mirrors the real swap.other.ts layout: a parameterized title inside an exported
