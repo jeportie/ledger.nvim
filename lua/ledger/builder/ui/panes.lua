@@ -249,15 +249,23 @@ end
 -- focus index lines up across both.
 function M.pipeline_items(st)
   local items = {}
+  local clean -- emitted LAST (after Run-tests) so it reads as the optional step
   for _, step in ipairs(st.steps or {}) do
-    items[#items + 1] = { kind = "step", step = step }
-    if st.show_substeps then
-      for _, sub in ipairs((st.substeps or {})[step.id] or {}) do
-        items[#items + 1] = { kind = "substep", parent = step.id, sub = sub }
+    if step.id == "clean" then
+      clean = step
+    else
+      items[#items + 1] = { kind = "step", step = step }
+      if st.show_substeps then
+        for _, sub in ipairs((st.substeps or {})[step.id] or {}) do
+          items[#items + 1] = { kind = "substep", parent = step.id, sub = sub }
+        end
       end
     end
   end
   items[#items + 1] = { kind = "runtests" }
+  if clean then
+    items[#items + 1] = { kind = "step", step = clean }
+  end
   return items
 end
 
@@ -314,12 +322,12 @@ function M.pipeline_content(st, inner_w)
 
   local tstate = require("ledger.builder.pipeline").target_state(steps, st.statuses or {})
 
-  local function row(bullet, bhl, col1, g, ghl, word, dur, cb)
+  local function row(bullet, bhl, col1, g, ghl, word, dur, cb, col1_hl)
     local bw = vim.fn.strdisplaywidth(bullet)
     local gw = vim.fn.strdisplaywidth(g)
     return {
       { bullet .. " ", bhl }, -- Step column (left-aligned)
-      { lpad(col1, step_w - bw - 1), "Normal", cb },
+      { lpad(col1, step_w - bw - 1), col1_hl or "Normal", cb },
       { " " },
       { g .. " ", ghl }, -- State column (left-aligned)
       { lpad(word, state_w - gw - 1), ghl },
@@ -353,16 +361,18 @@ function M.pipeline_content(st, inner_w)
       local g, ghl = glyph(state, st.tick or 0, state == "in_progress" and hl.pulse or nil)
       local bullet, bhl
       if focused then
-        bullet, bhl = "▶", "LedgerBuilderKey"
+        bullet, bhl = "▶", "LedgerTitle" -- blue+bold, matching a focused process card
       elseif state == "in_progress" then
         bullet, bhl = spin.frame(step_spinner, st.tick or 0), "LedgerYellow0"
       else
         bullet, bhl = "✶", "LedgerYellow0"
       end
-      -- clean leads with the broom icon; the real build steps are numbered 1..N.
+      -- clean leads with the broom icon and renders last (after Run-tests) behind a
+      -- blank, to read as the optional step; the real build steps are numbered 1..N.
       local lead
       if step.id == "clean" then
         lead = clean_icon
+        tbl[#tbl + 1] = {} -- separator above the optional clean action
       else
         num = num + 1
         lead = tostring(num)
@@ -375,7 +385,9 @@ function M.pipeline_content(st, inner_w)
         g,
         ghl,
         STATE_WORD[state] or state,
-        d and fmt_dur(d.duration) or "-"
+        d and fmt_dur(d.duration) or "-",
+        nil,
+        focused and "LedgerTitle" or nil
       )
     elseif it.kind == "substep" then
       -- per-project rebuild/install, indented under its parent step
@@ -384,18 +396,20 @@ function M.pipeline_content(st, inner_w)
       local g, ghl = glyph(state, st.tick or 0, state == "in_progress" and hl.pulse or nil)
       tbl[#tbl + 1] = row(
         focused and "▶" or " ",
-        focused and "LedgerBuilderKey" or "LedgerBuilderDim",
+        focused and "LedgerTitle" or "LedgerBuilderDim",
         "└ " .. sub.project,
         g,
         ghl,
         STATE_WORD[state] or state,
-        sub.dur and fmt_dur(sub.dur) or "-"
+        sub.dur and fmt_dur(sub.dur) or "-",
+        nil,
+        focused and "LedgerTitle" or nil
       )
     else -- runtests
       tbl[#tbl + 1] = {} -- a blank line separating the build steps from Run-tests
       tbl[#tbl + 1] = row(
         focused and "▶" or "✶",
-        focused and "LedgerBuilderKey" or "LedgerYellow0",
+        focused and "LedgerTitle" or "LedgerYellow0",
         rt_icon .. " Run tests",
         rt_g,
         rt_hl,
@@ -403,7 +417,8 @@ function M.pipeline_content(st, inner_w)
         rt_dur and fmt_dur(rt_dur.duration) or "-",
         st.on_runtests and function()
           st.on_runtests()
-        end or nil
+        end or nil,
+        focused and "LedgerTitle" or nil
       )
     end
   end
