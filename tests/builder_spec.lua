@@ -312,6 +312,16 @@ describe("ledger.builder.ui.panes", function()
     return s
   end
 
+  -- The Run-tests row's position is layout-defined (clean now renders last), so
+  -- resolve it from pipeline_items rather than assuming a fixed offset.
+  local function runtests_idx(st)
+    for i, it in ipairs(panes.pipeline_items(st)) do
+      if it.kind == "runtests" then
+        return i
+      end
+    end
+  end
+
   it("renders all pane content without error", function()
     is_lines(panes.header(fake))
     is_lines(panes.pipeline_content(fake, 44))
@@ -473,6 +483,41 @@ describe("ledger.builder.ui.panes", function()
     assert.equals(3, #panes.pipeline_items(st)) -- libs, build, runtests
   end)
 
+  it("pipeline_items renders clean LAST, after the Run-tests row (optional)", function()
+    local st = vim.tbl_extend("force", {}, fake, {
+      steps = {
+        { id = "clean", label = "clean", template = "shared.clean", optional = true },
+        { id = "install", label = "install deps", template = "desktop.install" },
+        { id = "build", label = "build:testing", template = "desktop.build.testing" },
+      },
+      show_substeps = false,
+    })
+    local items = panes.pipeline_items(st)
+    assert.equals("install", items[1].step.id) -- real steps first, clean is NOT inline
+    assert.equals("build", items[2].step.id)
+    assert.equals("runtests", items[3].kind)
+    assert.equals("clean", items[4].step.id) -- clean last, after Run-tests
+  end)
+
+  it("the focused pipeline step is blue (LedgerTitle), matching a focused process card", function()
+    local pl = require("ledger.builder.pipeline")
+    local st = vim.tbl_extend("force", {}, fake, {
+      platform = "desktop",
+      steps = pl.steps("desktop"),
+      show_substeps = false,
+      focus = { col = "pipeline", idx = 1 }, -- first pipeline item (a real build step)
+    })
+    local found = false
+    for _, l in ipairs(panes.pipeline_content(st, 70)) do
+      if l[1] and l[1][1] and l[1][1]:find("▶", 1, true) then
+        assert.equals("LedgerTitle", l[1][2]) -- bullet blue+bold
+        assert.equals("LedgerTitle", l[2][2]) -- label blue+bold
+        found = true
+      end
+    end
+    assert.is_true(found) -- the focused row rendered a ▶
+  end)
+
   it("renders a sub-step row indented with state + duration", function()
     local st = vim.tbl_extend("force", {}, fake, {
       steps = { { id = "libs", label = "build:lld:deps", template = "desktop.build.deps" } },
@@ -537,8 +582,8 @@ describe("ledger.builder.ui.panes", function()
         platform_flag = flag,
         steps = steps,
         show_substeps = false,
-        focus = { col = "pipeline", idx = #steps + 1 }, -- the Run-tests row (last item)
       })
+      st.focus = { col = "pipeline", idx = runtests_idx(st) } -- the Run-tests row
       return panes.current_log_id(st)
     end
     assert.equals("mobile.detox.test", runtests_log("mobile", "ios"))
@@ -552,8 +597,10 @@ describe("ledger.builder.ui.panes", function()
     local function focus(idx)
       return vim.tbl_extend("force", {}, fake, base, { focus = { col = "pipeline", idx = idx } })
     end
-    assert.equals(steps[1].template, panes.focused_task_id(focus(1))) -- first build step
-    assert.equals("mobile.detox.test", panes.focused_task_id(focus(#steps + 1))) -- Run-tests row
+    -- item 1 is the first build step SHOWN (clean renders last, so it is not clean)
+    local items = panes.pipeline_items(focus(1))
+    assert.equals(items[1].step.template, panes.focused_task_id(focus(1)))
+    assert.equals("mobile.detox.test", panes.focused_task_id(focus(runtests_idx(focus(1))))) -- Run-tests row
     local proc = vim.tbl_extend(
       "force",
       {},
@@ -573,8 +620,8 @@ describe("ledger.builder.ui.panes", function()
       steps = steps,
       show_substeps = false,
       bottom = "logs",
-      focus = { col = "pipeline", idx = #steps + 1 },
     })
+    st.focus = { col = "pipeline", idx = runtests_idx(st) }
     local s = flat(panes.logs_content(st, 10, 60))
     assert.is_truthy(s:find("Running 3 tests", 1, true)) -- the test log shows
     assert.is_nil(s:find("no output yet", 1, true)) -- not the empty placeholder
