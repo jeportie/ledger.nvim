@@ -97,12 +97,18 @@ function M.run(id, opts)
           plat = (opts.config and opts.config:match("^android")) and "android" or "ios"
         end
         pcall(function()
-          require("ledger.builder.history").record({
+          local history = require("ledger.builder.history")
+          -- one timestamp for both the entry and its sidecar filename so they align
+          local now = os.time()
+          local log_path = history.write_log(now, key, rec.lines)
+          history.record({
+            time = now,
             label = label,
             kind = spec.kind,
             code = code,
             duration = rec.duration,
             platform = plat,
+            log = log_path,
           })
         end)
       end

@@ -688,16 +688,20 @@ function M.stats_history(st, inner_w)
   end
   local maxlabel = math.max(4, (inner_w or 24) - 11)
   local lines = { {} } -- top breathing room
-  for _, e in ipairs(recent) do
+  for i, e in ipairs(recent) do
     local ok = e.code == 0
     local label = (e.label or "?"):gsub("^%S+%s*·%s*", "")
     if vim.fn.strdisplaywidth(label) > maxlabel then
       label = vim.fn.strcharpart(label, 0, maxlabel - 1) .. "…"
     end
+    -- clicking a row reopens that run's saved log (same handler as the `L` picker)
+    local cb = st.on_history_pick and function()
+      st.on_history_pick(i)
+    end or nil
     lines[#lines + 1] = {
       { os.date("%H:%M ", e.time), "LedgerBuilderDim" },
       { ok and "✓ " or "✗ ", ok and "LedgerStateDone" or "LedgerStateFailed" },
-      { label, "Normal" },
+      { label, "Normal", cb },
     }
   end
   return lines
@@ -849,6 +853,7 @@ function M.help_shortcuts()
     { { "  View", "LedgerBuilderTitle" } },
     row("wheel / C-u C-d", "scroll the Logs pane"),
     row("y", "copy logs → clipboard", "the focused step's / last-run log"),
+    row("L", "reopen a past run's log", "pick from history · or click a Stats row"),
     row("?", "toggle this help"),
     row("q / Esc", "hide (state preserved)"),
   }
