@@ -1,0 +1,19 @@
+Swap - 1inch flow
+Swap - OKX flow
+[Aleo] Add account
+[Algorand] Add account
+[Aptos] Add account
+[Base] Add account
+[Bitcoin Cash] Add account
+[Bitcoin] Add account
+[Cardano] Add account
+[Cosmos] Add account
+[Ethereum Classic] Add account
+[Ethereum] Add account
+[Polkadot] Add account
+[Solana] Add account
+[Stellar] Add account
+[Tezos] Add account
+[Tron] Add account
+[XRP] Add account
+[Zcash] Add account
