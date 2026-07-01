@@ -848,6 +848,7 @@ function M.help_shortcuts()
     row("p", "toggle PWDEBUG (desktop)"),
     row("d", "Speculos device dropdown"),
     row("F", "fix / maintenance", "reinstall · iOS pods · clean"),
+    row("S", "settings", "toggle border/loader/animation… · delete Allure results/report"),
     row("R", "refresh staleness + liveness"),
     row("n", "nx actions (Telescope)", "hides Builder · runs any nx target"),
     {},

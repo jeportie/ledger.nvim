@@ -35,16 +35,31 @@ local load_history_log
 
 local menus = require("ledger.builder.menus") -- open_menu / pick_project
 local watch = require("ledger.builder.watch") -- watch modes + per-project sub-steps
+local settings = require("ledger.builder.settings") -- persisted overlay (the `S` menu)
 
+-- The effective builder config: the read-only setup{} table with the persisted
+-- settings overlay (ledger.builder.settings) stacked on top, so a toggle from
+-- the `S` menu overrides its config default and survives a restart.
 local function cfg()
   local ok, c = pcall(function()
-    return require("ledger.config").get().builder or {}
+    return vim.tbl_deep_extend(
+      "force",
+      require("ledger.config").get().builder or {},
+      require("ledger.builder.settings").load()
+    )
   end)
   return ok and c or {}
 end
 
 local function default_config(flag)
   return flag == "android" and "android.emu.release" or "ios.sim.debug"
+end
+
+-- Test seam: the effective builder config (config + persisted overlay). Lets the
+-- specs assert the `S` menu's settings.set() lands through the same cfg() the
+-- runtime reads, without duplicating the merge expression.
+function M._cfg()
+  return cfg()
 end
 
 -- ── focus helpers ───────────────────────────────────────────────────────────
@@ -579,6 +594,25 @@ function M.report_template_for(platform)
   return platform == "desktop" and "desktop.allure" or "mobile.allure"
 end
 
+-- Absolute Allure results/report dirs for a platform, under the monorepo root.
+-- desktop keeps results + report side-by-side under e2e/desktop; mobile nests
+-- both under e2e/mobile/artifacts (detox writes raw results there; the allure
+-- script generates the report as an artifacts/ subdir). `flag` is accepted for
+-- symmetry with the other dispatch helpers but doesn't change the layout. Pure
+-- so the settings menu's delete action is unit-testable (no real dirs touched).
+function M.allure_paths(platform, flag, root)
+  if platform == "desktop" then
+    return {
+      results = root .. "/e2e/desktop/allure-results",
+      report = root .. "/e2e/desktop/allure-report",
+    }
+  end
+  return {
+    results = root .. "/e2e/mobile/artifacts",
+    report = root .. "/e2e/mobile/artifacts/allure-report",
+  }
+end
+
 -- `O`: generate + open the e2e Allure report for the active platform. There's
 -- exactly one report per platform, so run it directly (no menu, manual only).
 function M.open_report()
@@ -1084,6 +1118,97 @@ local function fix_menu()
   end)
 end
 
+-- ── settings menu (persisted overlay + Allure delete) ─────────────────────────
+
+local ANIMATIONS = { "max", "tasteful", "minimal", "off" }
+
+-- Delete an Allure dir (results | report) for the active platform, after a
+-- confirm. Pure path resolution lives in M.allure_paths; here we just confirm
+-- and vim.fn.delete(_, "rf") the dir (NEVER a shell rm -rf). Notifies the
+-- outcome; missing dir is treated as already-clean.
+local function delete_allure(which, target)
+  local paths = M.allure_paths(state.platform, state.platform_flag, state.root)
+  local dir = paths[which]
+  if vim.fn.isdirectory(dir) == 0 then
+    vim.notify("Builder: no Allure " .. which .. " to delete (" .. target .. ")", vim.log.levels.INFO)
+    return
+  end
+  local pick = vim.fn.confirm("Delete Allure " .. which .. " for " .. target .. "?\n" .. dir, "&Yes\n&No", 2)
+  if pick ~= 1 then
+    return
+  end
+  if vim.fn.delete(dir, "rf") == 0 then
+    vim.notify("Builder: deleted Allure " .. which .. " (" .. target .. ")", vim.log.levels.INFO)
+  else
+    vim.notify("Builder: failed to delete " .. dir, vim.log.levels.ERROR)
+  end
+end
+
+-- `S`: an interactive settings panel over the persisted overlay. Each toggle
+-- row shows its current effective value; picking one flips/cycles it, persists
+-- via settings.set, re-applies what a live rebuild() can (spinner cadence reads
+-- cfg() each tick), then REOPENS the menu so several toggles feel like a panel.
+-- Some visual options (border/transparent/backdrop) are read only when the
+-- Builder float is created, so they take effect on the next open. The two Allure
+-- rows delete the active platform's results/report dir (confirm-gated).
+local function settings_menu()
+  if not state.root then
+    return
+  end
+  local c = cfg()
+  local function on(v)
+    return v and "on" or "off"
+  end
+  local target = state.platform == "desktop" and "desktop" or state.platform_flag
+
+  -- Ordered { id, label } rows; the id is stable while the label shows live state.
+  local rows = {
+    { id = "border", label = "Border: " .. on(c.border) },
+    { id = "transparent", label = "Transparent: " .. on(c.transparent) },
+    { id = "backdrop", label = "Backdrop: " .. on(c.backdrop) },
+    { id = "loader", label = "Loader: " .. on(c.loader) },
+    { id = "animation", label = "Animation: " .. (c.animation or "max") },
+    { id = "substeps_default", label = "Substeps default: " .. on(c.substeps_default) },
+    { id = "allure_results", label = "Delete Allure results (" .. target .. ")" },
+    { id = "allure_report", label = "Delete Allure report (" .. target .. ")" },
+  }
+  local labels, by_label = {}, {}
+  for _, r in ipairs(rows) do
+    labels[#labels + 1] = r.label
+    by_label[r.label] = r.id
+  end
+
+  menus.open_menu("Settings", labels, nil, function(choice)
+    local id = by_label[choice]
+    if not id then
+      return
+    end
+    if id == "animation" then
+      -- cycle max → tasteful → minimal → off → max
+      local cur = c.animation or "max"
+      local nxt = ANIMATIONS[1]
+      for i, a in ipairs(ANIMATIONS) do
+        if a == cur then
+          nxt = ANIMATIONS[(i % #ANIMATIONS) + 1]
+          break
+        end
+      end
+      settings.set("animation", nxt)
+      rebuild()
+      settings_menu()
+    elseif id == "allure_results" then
+      delete_allure("results", target)
+    elseif id == "allure_report" then
+      delete_allure("report", target)
+    else
+      -- boolean toggle: flip the effective value, persist, re-apply, reopen.
+      settings.set(id, not c[id])
+      rebuild()
+      settings_menu()
+    end
+  end)
+end
+
 local function toggle_help()
   state.help = not state.help
   rebuild()
@@ -1488,6 +1613,7 @@ local function set_keymaps()
     rebuild()
   end)
   map("F", fix_menu)
+  map("S", settings_menu)
   map("R", function()
     require("ledger.builder.running").invalidate() -- force a fresh process scan
     refresh_statuses()
