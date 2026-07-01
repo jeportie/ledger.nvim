@@ -953,3 +953,173 @@ describe("ledger.builder._enclosing_export", function()
     assert.is_nil(builder._enclosing_export({ "const localOnly = 1", "it('z')" }, 2))
   end)
 end)
+
+describe("ledger.builder controller — focus & navigation", function()
+  local builder = require("ledger.builder")
+  local panes = require("ledger.builder.ui.panes")
+  local history = require("ledger.builder.history")
+
+  -- A headless fake `state`: no buffer, so redraw/rebuild no-op and only the
+  -- pure focus math runs. 3 non-clean steps → pipeline_items = 3 + Run-tests = 4.
+  local function mkstate(over)
+    local st = {
+      platform = "mobile",
+      platform_flag = "ios",
+      config = "ios.sim.debug",
+      root = "/repo/LedgerHQ-ledger-live",
+      side = "left",
+      focus_idx = 1,
+      bottom = "logs",
+      buf = nil,
+      steps = {
+        { id = "deps", label = "deps installed", template = "mobile.install" },
+        { id = "build", label = "native app built", template = "mobile.detox.build" },
+        { id = "metro", label = "metro", template = "mobile.metro", proc = "metro" },
+      },
+      statuses = { deps = "done", build = "stale", metro = "running" },
+      procs = {
+        { name = "metro", label = "Metro", alive = true, port = 8081 },
+        { name = "speculos", label = "Speculos", alive = true, count = 2 },
+      },
+    }
+    return vim.tbl_extend("force", st, over or {})
+  end
+
+  -- Seed the in-memory history cache for the ios target (no disk write → no
+  -- cross-spec coupling; recent() reads M._entries when set).
+  local function seed(n)
+    local entries = {}
+    for i = 1, n do
+      entries[i] = { time = i, label = "run" .. i, kind = "test", code = 0, platform = "ios" }
+    end
+    history._entries = entries
+  end
+
+  after_each(function()
+    history._entries = {} -- leave the cache clean for other specs
+    builder._test.set_state(nil)
+  end)
+
+  it("focused_view reflects state.side (bottom → history)", function()
+    builder._test.set_state(mkstate({ side = "left" }))
+    assert.equals("pipeline", builder._test.focused_view())
+    builder._test.set_state(mkstate({ side = "right" }))
+    assert.equals("processes", builder._test.focused_view())
+    builder._test.set_state(mkstate({ side = "bottom" }))
+    assert.equals("history", builder._test.focused_view())
+  end)
+
+  it("view_len('history') matches the target-filtered recent(8) list", function()
+    seed(3)
+    builder._test.set_state(mkstate())
+    assert.equals(3, builder._test.view_len("history"))
+    -- identical source to what the Stats pane renders
+    assert.equals(#history.recent(8, nil, "ios"), builder._test.view_len("history"))
+    -- and to the controller's own history_recent helper
+    assert.equals(#builder._test.history_recent(builder._test.get_state()), builder._test.view_len("history"))
+  end)
+
+  it("down from the last pipeline row drops into History", function()
+    seed(2)
+    builder._test.set_state(mkstate({ side = "left", focus_idx = 4 })) -- last of 4 items
+    builder._test.nav("down")
+    local st = builder._test.get_state()
+    assert.equals("bottom", st.side)
+    assert.equals(1, st.focus_idx)
+    assert.equals("stats", st.bottom) -- rows only render in Stats → auto-switched
+  end)
+
+  it("down within the pipeline just advances (no early drop)", function()
+    seed(2)
+    builder._test.set_state(mkstate({ side = "left", focus_idx = 1 }))
+    builder._test.nav("down")
+    local st = builder._test.get_state()
+    assert.equals("left", st.side)
+    assert.equals(2, st.focus_idx)
+  end)
+
+  it("down from the last processes row drops into History", function()
+    seed(2)
+    -- 2 procs → single row of 2; focus the last card, then down → History
+    builder._test.set_state(mkstate({ side = "right", focus_idx = 2, bottom = "stats" }))
+    builder._test.nav("down")
+    local st = builder._test.get_state()
+    assert.equals("bottom", st.side)
+    assert.equals(1, st.focus_idx)
+  end)
+
+  it("does not enter History when there is none to land on", function()
+    history._entries = {} -- empty
+    builder._test.set_state(mkstate({ side = "left", focus_idx = 4 }))
+    builder._test.nav("down")
+    local st = builder._test.get_state()
+    assert.equals("left", st.side) -- stayed put
+    assert.equals(4, st.focus_idx)
+  end)
+
+  it("in History: k at the top returns to the prior side; j/k clamp in range", function()
+    seed(3)
+    builder._test.set_state(mkstate({ side = "left", focus_idx = 4 }))
+    builder._test.nav("down") -- enter History from Pipeline (prev_side = "left")
+    local st = builder._test.get_state()
+    assert.equals("bottom", st.side)
+    -- j moves down, clamped at the last entry
+    builder._test.nav("down")
+    assert.equals(2, st.focus_idx)
+    builder._test.nav("down")
+    builder._test.nav("down")
+    builder._test.nav("down") -- past the end
+    assert.equals(3, st.focus_idx) -- clamped to #recent
+    -- k walks back up, clamped at 1
+    builder._test.nav("up")
+    assert.equals(2, st.focus_idx)
+    builder._test.nav("up")
+    assert.equals("bottom", st.side)
+    assert.equals(1, st.focus_idx)
+    -- k at the top escapes back to the remembered side
+    builder._test.nav("up")
+    assert.equals("left", st.side)
+  end)
+
+  it("activate in History loads the focused run's log, then focuses the top", function()
+    -- write a real sidecar so load_history_log finds saved lines
+    local log = history.write_log(42, "history:test", { "saved log line A", "line B" })
+    assert.is_truthy(log)
+    history._entries = {
+      { time = 42, label = "swap · run", kind = "test", code = 0, platform = "ios", log = log },
+    }
+    builder._test.set_state(mkstate({ side = "bottom", focus_idx = 1, bottom = "stats" }))
+    builder._test.activate()
+    local st = builder._test.get_state()
+    assert.is_truthy(st.log_id) -- a run's log got pinned…
+    assert.equals("logs", st.bottom) -- …the bottom flipped to Logs…
+    assert.equals("left", st.side) -- …and focus moved back to the top (rows gone)
+    local tasks = require("ledger.tasks")
+    assert.is_truthy(tasks.log_len(st.log_id) > 0) -- injected under the synthetic id
+  end)
+
+  it("stats_history marks the focused row with ▶ / LedgerTitle", function()
+    seed(3)
+    local st = mkstate({ focus = { col = "history", idx = 2 } })
+    local lines = panes.stats_history(st, 30)
+    -- row 1 is breathing room; entries follow. Find the ▶ marker + its title hl.
+    local marked, marked_hl = 0, nil
+    for _, line in ipairs(lines) do
+      local seg = line[1]
+      if seg and seg[1] and seg[1]:find("▶", 1, true) then
+        marked = marked + 1
+        marked_hl = seg[2]
+      end
+    end
+    assert.equals(1, marked) -- exactly one focused row
+    assert.equals("LedgerTitle", marked_hl)
+    -- no marker when focus is elsewhere (e.g. the Pipeline column)
+    local none = panes.stats_history(mkstate({ focus = { col = "pipeline", idx = 1 } }), 30)
+    for _, line in ipairs(none) do
+      local seg = line[1]
+      if seg and seg[1] then
+        assert.is_nil(seg[1]:find("▶", 1, true))
+      end
+    end
+  end)
+end)
