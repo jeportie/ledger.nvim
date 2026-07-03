@@ -35,16 +35,31 @@ local load_history_log
 
 local menus = require("ledger.builder.menus") -- open_menu / pick_project
 local watch = require("ledger.builder.watch") -- watch modes + per-project sub-steps
+local settings = require("ledger.builder.settings") -- persisted overlay (the `S` menu)
 
+-- The effective builder config: the read-only setup{} table with the persisted
+-- settings overlay (ledger.builder.settings) stacked on top, so a toggle from
+-- the `S` menu overrides its config default and survives a restart.
 local function cfg()
   local ok, c = pcall(function()
-    return require("ledger.config").get().builder or {}
+    return vim.tbl_deep_extend(
+      "force",
+      require("ledger.config").get().builder or {},
+      require("ledger.builder.settings").load()
+    )
   end)
   return ok and c or {}
 end
 
 local function default_config(flag)
   return flag == "android" and "android.emu.release" or "ios.sim.debug"
+end
+
+-- Test seam: the effective builder config (config + persisted overlay). Lets the
+-- specs assert the `S` menu's settings.set() lands through the same cfg() the
+-- runtime reads, without duplicating the merge expression.
+function M._cfg()
+  return cfg()
 end
 
 -- ── focus helpers ───────────────────────────────────────────────────────────
@@ -579,6 +594,25 @@ function M.report_template_for(platform)
   return platform == "desktop" and "desktop.allure" or "mobile.allure"
 end
 
+-- Absolute Allure results/report dirs for a platform, under the monorepo root.
+-- desktop keeps results + report side-by-side under e2e/desktop; mobile nests
+-- both under e2e/mobile/artifacts (detox writes raw results there; the allure
+-- script generates the report as an artifacts/ subdir). `flag` is accepted for
+-- symmetry with the other dispatch helpers but doesn't change the layout. Pure
+-- so the settings menu's delete action is unit-testable (no real dirs touched).
+function M.allure_paths(platform, flag, root)
+  if platform == "desktop" then
+    return {
+      results = root .. "/e2e/desktop/allure-results",
+      report = root .. "/e2e/desktop/allure-report",
+    }
+  end
+  return {
+    results = root .. "/e2e/mobile/artifacts",
+    report = root .. "/e2e/mobile/artifacts/allure-report",
+  }
+end
+
 -- `O`: generate + open the e2e Allure report for the active platform. There's
 -- exactly one report per platform, so run it directly (no menu, manual only).
 function M.open_report()
@@ -1084,6 +1118,116 @@ local function fix_menu()
   end)
 end
 
+-- ── settings menu (persisted overlay + Allure delete) ─────────────────────────
+
+local ANIMATIONS = { "max", "tasteful", "minimal", "off" }
+
+-- Delete an Allure dir (results | report) for the active platform, after a
+-- confirm. Pure path resolution lives in M.allure_paths; here we just confirm
+-- and vim.fn.delete(_, "rf") the dir (NEVER a shell rm -rf). Notifies the
+-- outcome; missing dir is treated as already-clean.
+local function delete_allure(which, target)
+  local paths = M.allure_paths(state.platform, state.platform_flag, state.root)
+  local dir = paths[which]
+  if vim.fn.isdirectory(dir) == 0 then
+    vim.notify("Builder: no Allure " .. which .. " to delete (" .. target .. ")", vim.log.levels.INFO)
+    return
+  end
+  local pick = vim.fn.confirm("Delete Allure " .. which .. " for " .. target .. "?\n" .. dir, "&Yes\n&No", 2)
+  if pick ~= 1 then
+    return
+  end
+  if vim.fn.delete(dir, "rf") == 0 then
+    vim.notify("Builder: deleted Allure " .. which .. " (" .. target .. ")", vim.log.levels.INFO)
+  else
+    vim.notify("Builder: failed to delete " .. dir, vim.log.levels.ERROR)
+  end
+end
+
+-- `S`: an interactive settings panel over the persisted overlay. Each toggle
+-- row shows its current effective value; picking one flips/cycles it, persists
+-- via settings.set, re-applies what a live rebuild() can (spinner cadence reads
+-- cfg() each tick), then REOPENS the menu so several toggles feel like a panel.
+-- Window options (border/transparent/backdrop/loader) are read when the float
+-- is created, so toggling one re-mounts the Builder to apply it immediately. The
+-- two Allure rows delete the active platform's results/report dir (confirm-gated).
+local function settings_menu()
+  if not state.root then
+    return
+  end
+  local c = cfg()
+  -- options read only at window-creation time → a re-mount applies them live.
+  local WINDOW_OPTS = { border = true, transparent = true, backdrop = true, loader = true }
+  local function on(v)
+    return v and "on" or "off"
+  end
+  local target = state.platform == "desktop" and "desktop" or state.platform_flag
+
+  -- Ordered { id, label } rows; the id is stable while the label shows live state.
+  local rows = {
+    { id = "border", label = "Border: " .. on(c.border) },
+    { id = "transparent", label = "Transparent: " .. on(c.transparent) },
+    { id = "backdrop", label = "Backdrop: " .. on(c.backdrop) },
+    { id = "loader", label = "Loader: " .. on(c.loader) },
+    { id = "animation", label = "Animation: " .. (c.animation or "max") },
+    { id = "substeps_default", label = "Substeps default: " .. on(c.substeps_default) },
+    { id = "allure_results", label = "Delete Allure results (" .. target .. ")" },
+    { id = "allure_report", label = "Delete Allure report (" .. target .. ")" },
+  }
+  local labels, by_label = {}, {}
+  for _, r in ipairs(rows) do
+    labels[#labels + 1] = r.label
+    by_label[r.label] = r.id
+  end
+
+  menus.open_menu("Settings", labels, nil, function(choice)
+    local id = by_label[choice]
+    if not id then
+      return
+    end
+    if id == "animation" then
+      -- cycle max → tasteful → minimal → off → max
+      local cur = c.animation or "max"
+      local nxt = ANIMATIONS[1]
+      for i, a in ipairs(ANIMATIONS) do
+        if a == cur then
+          nxt = ANIMATIONS[(i % #ANIMATIONS) + 1]
+          break
+        end
+      end
+      settings.set("animation", nxt)
+      rebuild()
+      settings_menu()
+    elseif id == "allure_results" then
+      delete_allure("results", target)
+    elseif id == "allure_report" then
+      delete_allure("report", target)
+    else
+      -- boolean toggle: flip the effective value + persist, then apply it.
+      local val = not c[id]
+      settings.set(id, val)
+      if id == "substeps_default" then
+        state.show_substeps = val -- apply the new default to the open session
+        rebuild()
+        settings_menu()
+      elseif WINDOW_OPTS[id] then
+        -- border/transparent/backdrop/loader are read when the float is created,
+        -- so re-mount to apply them now. The old window's WinClosed schedules a
+        -- (harmless — state.win is already nil) hide; schedule the re-show AFTER
+        -- it so it can't close the fresh window, then reopen the panel on top.
+        M.hide()
+        vim.schedule(function()
+          M.show()
+          vim.schedule(settings_menu)
+        end)
+      else
+        rebuild()
+        settings_menu()
+      end
+    end
+  end)
+end
+
 local function toggle_help()
   state.help = not state.help
   rebuild()
@@ -1488,6 +1632,7 @@ local function set_keymaps()
     rebuild()
   end)
   map("F", fix_menu)
+  map("S", settings_menu)
   map("R", function()
     require("ledger.builder.running").invalidate() -- force a fresh process scan
     refresh_statuses()
@@ -1544,6 +1689,41 @@ M._opening = false
 
 -- Open the float on the (already-initialised) state.buf and wire it up. Shared
 -- by a fresh build() and a re-show() so toggling preserves state.
+-- Close the dim backdrop window if one is open.
+local function close_backdrop()
+  if state and state.backdrop_win and vim.api.nvim_win_is_valid(state.backdrop_win) then
+    pcall(vim.api.nvim_win_close, state.backdrop_win, true)
+  end
+  if state then
+    state.backdrop_win = nil
+  end
+end
+
+-- A dim, full-editor backdrop behind the Builder float (config.builder.backdrop).
+-- A non-focusable minimal window at a low zindex with a dark, blended background
+-- (mirrors the Jira board's backdrop). The main float sits above it (zindex 50).
+local function open_backdrop()
+  close_backdrop() -- never stack two
+  local buf = vim.api.nvim_create_buf(false, true)
+  local win = vim.api.nvim_open_win(buf, false, {
+    relative = "editor",
+    row = 0,
+    col = 0,
+    width = vim.o.columns,
+    height = vim.o.lines,
+    focusable = false,
+    style = "minimal",
+    border = "none",
+    zindex = 20,
+  })
+  vim.api.nvim_set_hl(0, "LedgerBuilderBackdrop", { bg = "#000000", default = true })
+  vim.wo[win].winhighlight =
+    "Normal:LedgerBuilderBackdrop,NormalFloat:LedgerBuilderBackdrop,EndOfBuffer:LedgerBuilderBackdrop"
+  vim.wo[win].winblend = 40
+  state.backdrop_win = win
+  state.backdrop_buf = buf
+end
+
 local function mount()
   local volt = require("volt")
   local builder_cfg = cfg()
@@ -1553,6 +1733,10 @@ local function mount()
   compute_dims()
   refresh_meta()
   refresh_statuses()
+
+  if builder_cfg.backdrop then
+    open_backdrop() -- dim the editor behind the float (config.builder.backdrop)
+  end
 
   -- a re-shown buffer is still nomodifiable from the prior session; volt.run
   -- needs to write the blank canvas, so re-enable writes before rendering.
@@ -1624,7 +1808,7 @@ local function build()
     watching = false,
     watch_mode = (require("ledger.config").get().builder or {}).watch_default or "on-save",
     substeps = {}, -- per-project rebuild/install rows, keyed by parent step id
-    show_substeps = (require("ledger.config").get().builder or {}).substeps_default ~= false,
+    show_substeps = cfg().substeps_default ~= false, -- overlay-aware (settings menu)
     log_id = nil, -- pinned log (ad-hoc/watch task); cleared on navigation
     side = "left",
     focus_idx = 1,
@@ -1692,6 +1876,7 @@ function M.hide()
   pcall(function()
     require("ledger.builder.ui.loader").close()
   end)
+  close_backdrop()
   if state and state.win and vim.api.nvim_win_is_valid(state.win) then
     pcall(vim.api.nvim_win_close, state.win, true)
   end
@@ -1719,8 +1904,11 @@ function M.close()
     require("ledger.builder.ui.loader").close()
   end)
   if state then
-    local win, buf = state.win, state.buf
+    local win, buf, bwin = state.win, state.buf, state.backdrop_win
     state = nil
+    if bwin and vim.api.nvim_win_is_valid(bwin) then
+      pcall(vim.api.nvim_win_close, bwin, true)
+    end
     if win and vim.api.nvim_win_is_valid(win) then
       pcall(vim.api.nvim_win_close, win, true)
     end
