@@ -63,8 +63,9 @@ function M._cfg()
 end
 
 -- ── focus helpers ───────────────────────────────────────────────────────────
--- The top row is fixed: Pipeline (left) | Processes (right). h/l move focus
--- between them; the bottom row (logs/stats) is informational.
+-- The top row is Pipeline (left) | Processes (right); h/l move focus between
+-- them. `down` from the last row of a top column drops into the bottom History
+-- list (state.side == "bottom"), the third focusable view.
 
 local function left_view()
   return "pipeline"
@@ -73,7 +74,17 @@ local function right_view()
   return "processes"
 end
 local function focused_view()
+  if state.side == "bottom" then
+    return "history"
+  end
   return state.side == "right" and "processes" or "pipeline"
+end
+
+-- The target-filtered recent runs the Stats History pane renders. Single source
+-- of truth for the count/target so navigation and the pane stay in lockstep.
+local function history_recent(st)
+  local target = st.platform == "desktop" and "desktop" or st.platform_flag
+  return require("ledger.builder.history").recent(8, nil, target)
 end
 
 local function view_len(view)
@@ -82,6 +93,8 @@ local function view_len(view)
     return #require("ledger.builder.ui.panes").pipeline_items(state)
   elseif view == "processes" then
     return #(state.procs or {})
+  elseif view == "history" then
+    return #history_recent(state)
   end
   return 0
 end
@@ -96,6 +109,102 @@ local function sync_focus()
     state.focus_idx = math.max(1, math.min(state.focus_idx or 1, len))
   end
   state.focus = { col = v, idx = state.focus_idx }
+end
+
+-- ── navigation core ─────────────────────────────────────────────────────────
+-- Map the flat Processes focus_idx ↔ (row, col) via the same tiling the pane
+-- uses, so left/right move between card columns and up/down between rows.
+
+local function proc_pos(idx)
+  local rows = require("ledger.builder.ui.panes").proc_tile(#(state.procs or {}))
+  local seen = 0
+  for r, ncol in ipairs(rows) do
+    if idx <= seen + ncol then
+      return r, idx - seen, rows
+    end
+    seen = seen + ncol
+  end
+  return 1, 1, rows
+end
+
+local function proc_idx(rows, row, col)
+  row = math.max(1, math.min(row, #rows))
+  col = math.max(1, math.min(col, rows[row]))
+  local seen = 0
+  for r = 1, row - 1 do
+    seen = seen + rows[r]
+  end
+  return seen + col
+end
+
+-- Drop focus from a top column into the bottom History list. History rows only
+-- render in the Stats view, so remember the current view and switch to Stats
+-- when needed; the caller rebuilds (layout change) when this returns true. Stays
+-- put (returns false, no side change) when there is no history to land on.
+local function enter_history()
+  if view_len("history") == 0 then
+    return false
+  end
+  state.prev_side = state.side
+  state.side = "bottom"
+  state.focus_idx = 1
+  if state.bottom ~= "stats" then
+    state.bottom = "stats"
+    return true -- rows now visible; caller must rebuild
+  end
+  return false
+end
+
+-- Pure focus transition (no redraw/rebuild): mutate side/focus_idx/bottom for a
+-- direction. Returns true when the bottom view changed and a rebuild is needed.
+-- Split out from the keymap closure so it is unit-testable without a live float.
+local function nav_transition(dir)
+  state.log_id = nil -- taking control of navigation unpins the auto-shown log
+  local v = focused_view()
+  if v == "pipeline" then
+    local n = #require("ledger.builder.ui.panes").pipeline_items(state)
+    if dir == "up" then
+      state.focus_idx = math.max(1, (state.focus_idx or 1) - 1)
+    elseif dir == "down" then
+      if (state.focus_idx or 1) >= n then
+        return enter_history() -- past the last row → into History
+      end
+      state.focus_idx = math.min(n, (state.focus_idx or 1) + 1)
+    elseif dir == "right" and #(state.procs or {}) > 0 then
+      state.side, state.focus_idx = "right", 1
+    end
+  elseif v == "processes" then
+    local row, col, rows = proc_pos(state.focus_idx or 1)
+    if dir == "up" then
+      state.focus_idx = proc_idx(rows, row - 1, col)
+    elseif dir == "down" then
+      if row >= #rows then
+        return enter_history() -- past the last card row → into History
+      end
+      state.focus_idx = proc_idx(rows, row + 1, col)
+    elseif dir == "right" then
+      state.focus_idx = proc_idx(rows, row, col + 1)
+    elseif dir == "left" then
+      if col > 1 then
+        state.focus_idx = proc_idx(rows, row, col - 1)
+      else
+        state.side = "left" -- escape to Pipeline
+      end
+    end
+  else -- history: single column, up/down over the recent list
+    local n = view_len("history")
+    if dir == "up" then
+      if (state.focus_idx or 1) <= 1 then
+        state.side = state.prev_side or "left" -- back up to the top column
+        state.focus_idx = 1
+      else
+        state.focus_idx = state.focus_idx - 1
+      end
+    elseif dir == "down" then
+      state.focus_idx = math.min(n, (state.focus_idx or 1) + 1)
+    end
+  end
+  return false
 end
 
 -- ── status / metadata refresh ───────────────────────────────────────────────
@@ -655,6 +764,11 @@ local function activate()
     if p then
       M.proc_popup(p)
     end
+  elseif v == "history" then
+    -- load_history_log flips bottom → logs, hiding the History rows, so move
+    -- focus back to the top (Pipeline) rather than leaving it on a gone list.
+    load_history_log(history_recent(state)[state.focus_idx])
+    state.side = "left"
   end
 end
 
@@ -1337,9 +1451,7 @@ local function install_callbacks()
   -- Clicking a Stats "History" row loads that run's saved log. `i` indexes the
   -- same target-filtered recent(8) list panes.stats_history renders.
   state.on_history_pick = function(i)
-    local target = state.platform == "desktop" and "desktop" or state.platform_flag
-    local recent = require("ledger.builder.history").recent(8, nil, target)
-    load_history_log(recent[i])
+    load_history_log(history_recent(state)[i])
   end
 end
 
@@ -1527,55 +1639,12 @@ local function set_keymaps()
     vim.fn.setreg('"', text)
     vim.notify("Builder: copied " .. len .. " log lines to the clipboard (+)", vim.log.levels.INFO)
   end
-  -- 2-D navigation: Pipeline is the left column (steps + the Run-tests row),
-  -- Processes is a right-hand card grid. Map flat focus_idx ↔ (row,col) via the
-  -- same tiling panes uses, so left/right move between card columns too.
-  local function proc_pos(idx)
-    local rows = require("ledger.builder.ui.panes").proc_tile(#(state.procs or {}))
-    local seen = 0
-    for r, ncol in ipairs(rows) do
-      if idx <= seen + ncol then
-        return r, idx - seen, rows
-      end
-      seen = seen + ncol
-    end
-    return 1, 1, rows
-  end
-  local function proc_idx(rows, row, col)
-    row = math.max(1, math.min(row, #rows))
-    col = math.max(1, math.min(col, rows[row]))
-    local seen = 0
-    for r = 1, row - 1 do
-      seen = seen + rows[r]
-    end
-    return seen + col
-  end
+  -- Navigation: Pipeline (left column) | Processes (right card grid) on top,
+  -- History list below. nav_transition (module scope) does the pure focus math;
+  -- when it enters/leaves the bottom it flips the Stats view, so rebuild then.
   local function nav(dir)
-    state.log_id = nil -- taking control of navigation unpins the auto-shown log
-    if focused_view() == "pipeline" then
-      local n = #require("ledger.builder.ui.panes").pipeline_items(state)
-      if dir == "up" then
-        state.focus_idx = math.max(1, (state.focus_idx or 1) - 1)
-      elseif dir == "down" then
-        state.focus_idx = math.min(n, (state.focus_idx or 1) + 1)
-      elseif dir == "right" and #(state.procs or {}) > 0 then
-        state.side, state.focus_idx = "right", 1
-      end
-    else -- processes grid
-      local row, col, rows = proc_pos(state.focus_idx or 1)
-      if dir == "up" then
-        state.focus_idx = proc_idx(rows, row - 1, col)
-      elseif dir == "down" then
-        state.focus_idx = proc_idx(rows, row + 1, col)
-      elseif dir == "right" then
-        state.focus_idx = proc_idx(rows, row, col + 1)
-      elseif dir == "left" then
-        if col > 1 then
-          state.focus_idx = proc_idx(rows, row, col - 1)
-        else
-          state.side = "left" -- escape to Pipeline
-        end
-      end
+    if nav_transition(dir) then
+      rebuild() -- bottom view changed (History rows shown) → relayout
     end
     sync_focus()
     redraw("body")
@@ -1933,5 +2002,27 @@ function M.register_commands()
     M.toggle()
   end, { desc = "Toggle the Ledger Builder dashboard" })
 end
+
+-- ── test-only seam ───────────────────────────────────────────────────────────
+-- The focus/navigation logic lives in module-local closures over `state`, so it
+-- can't be reached without opening the float. Expose a thin harness that swaps a
+-- fake `state` in and drives the real functions. redraw/rebuild guard on a valid
+-- buffer, so with `buf = nil` they no-op and only the focus math runs.
+M._test = {
+  set_state = function(st)
+    state = st
+  end,
+  get_state = function()
+    return state
+  end,
+  focused_view = focused_view,
+  view_len = view_len,
+  history_recent = history_recent,
+  nav = function(dir)
+    nav_transition(dir)
+    sync_focus()
+  end,
+  activate = activate,
+}
 
 return M

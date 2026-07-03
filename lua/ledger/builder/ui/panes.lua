@@ -686,10 +686,12 @@ function M.stats_history(st, inner_w)
   if #recent == 0 then
     return { {}, { { "no runs yet", "LedgerBuilderDim" } } }
   end
-  local maxlabel = math.max(4, (inner_w or 24) - 11)
+  -- one ▶ column reserved so focus doesn't shift the row (mirrors pipeline)
+  local maxlabel = math.max(4, (inner_w or 24) - 13)
   local lines = { {} } -- top breathing room
   for i, e in ipairs(recent) do
     local ok = e.code == 0
+    local focused = st.focus and st.focus.col == "history" and st.focus.idx == i
     local label = (e.label or "?"):gsub("^%S+%s*·%s*", "")
     if vim.fn.strdisplaywidth(label) > maxlabel then
       label = vim.fn.strcharpart(label, 0, maxlabel - 1) .. "…"
@@ -699,9 +701,10 @@ function M.stats_history(st, inner_w)
       st.on_history_pick(i)
     end or nil
     lines[#lines + 1] = {
+      { focused and "▶ " or "  ", focused and "LedgerTitle" or "LedgerBuilderDim" },
       { os.date("%H:%M ", e.time), "LedgerBuilderDim" },
       { ok and "✓ " or "✗ ", ok and "LedgerStateDone" or "LedgerStateFailed" },
-      { label, "Normal", cb },
+      { label, focused and "LedgerTitle" or "Normal", cb },
     }
   end
   return lines
@@ -830,7 +833,8 @@ function M.help_shortcuts()
     {},
     { { "  Navigation", "LedgerBuilderTitle" } },
     row("h / l / ←→", "focus Pipeline / Processes"),
-    row("j k ↑↓", "move within a column"),
+    row("j k ↑↓", "move within a column", "↓ past the last row drops into History"),
+    row("⏎ (History)", "load that run's saved log"),
     row("mouse", "click any item / tab / button"),
     {},
     { { "  Actions", "LedgerBuilderTitle" } },
@@ -855,7 +859,7 @@ function M.help_shortcuts()
     { { "  View", "LedgerBuilderTitle" } },
     row("wheel / C-u C-d", "scroll the Logs pane"),
     row("y", "copy logs → clipboard", "the focused step's / last-run log"),
-    row("L", "reopen a past run's log", "pick from history · or click a Stats row"),
+    row("L", "reopen a past run's log", "quick-pick · or ↓ into History / click a Stats row"),
     row("?", "toggle this help"),
     row("q / Esc", "hide (state preserved)"),
   }
