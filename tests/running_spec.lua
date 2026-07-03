@@ -4,8 +4,9 @@ local pipeline = require("ledger.builder.pipeline")
 describe("ledger.builder.running.running_steps", function()
   local desktop = pipeline.steps("desktop", { desktop_build = "testing" })
   local ios = pipeline.steps("mobile", { platform_flag = "ios" })
+  -- Unscoped matching (root=nil): the legacy whole-listing behaviour.
   local function scan(steps, listing)
-    return running.running_steps(steps, function()
+    return running.running_steps(steps, nil, function()
       return listing
     end)
   end
@@ -56,6 +57,54 @@ describe("ledger.builder.running.running_steps", function()
   end)
 end)
 
+-- #61: with two ledger-live checkouts open, a build in repo A must not show as
+-- in-progress in repo B. When a `root` is given, a matched process only counts
+-- if its cwd is under that root.
+describe("ledger.builder.running root-scoping", function()
+  local desktop = pipeline.steps("desktop", { desktop_build = "testing" })
+  local ios = pipeline.steps("mobile", { platform_flag = "ios" })
+  -- listing is "<pid> <command>" lines; cwds maps pid → the process's cwd.
+  local function scan_root(steps, root, listing, cwds)
+    return running.running_steps(steps, root, function()
+      return listing
+    end, function(pid)
+      return cwds[pid]
+    end)
+  end
+
+  it("flags a matched command only when its process cwd is under root", function()
+    local listing = "111 pnpm desktop build:testing\n222 nvim\n"
+    -- same command, two repos: flagged under repoA, NOT under repoB (the bug)
+    assert.is_true(scan_root(desktop, "/src/repoA", listing, { ["111"] = "/src/repoA/apps/ledger-live-desktop" }).build)
+    assert.is_nil(scan_root(desktop, "/src/repoA", listing, { ["111"] = "/src/repoB/apps/ledger-live-desktop" }).build)
+  end)
+
+  it("scopes the generic install pattern per repo", function()
+    local listing = "500 pnpm i --filter=ledger-live-desktop\n"
+    assert.is_true(scan_root(desktop, "/src/repoA", listing, { ["500"] = "/src/repoA" }).install)
+    assert.is_nil(scan_root(desktop, "/src/repoA", listing, { ["500"] = "/src/repoB" }).install)
+  end)
+
+  it("scopes the mobile detox build per repo", function()
+    local listing = "77 pnpm mobile e2e:build -c ios.sim.debug\n"
+    assert.is_true(scan_root(ios, "/src/repoA", listing, { ["77"] = "/src/repoA/apps/ledger-live-mobile" }).build)
+    assert.is_nil(scan_root(ios, "/src/repoA", listing, { ["77"] = "/src/repoB" }).build)
+  end)
+
+  it("treats the root itself as under-root (exact match)", function()
+    assert.is_true(scan_root(desktop, "/src/repoA", "9 pnpm clean\n", { ["9"] = "/src/repoA" }).clean)
+  end)
+
+  it("does not flag a match whose cwd can't be resolved (fails safe)", function()
+    assert.is_nil(scan_root(desktop, "/src/repoA", "111 pnpm build:cli\n", {}).cli)
+  end)
+
+  it("a sibling path sharing a prefix is not treated as under root", function()
+    -- /src/repoA-2 must not count as under /src/repoA
+    assert.is_nil(scan_root(desktop, "/src/repoA", "111 pnpm build:cli\n", { ["111"] = "/src/repoA-2" }).cli)
+  end)
+end)
+
 describe("ledger.builder.running TTL memo", function()
   local ios = pipeline.steps("mobile", { platform_flag = "ios" })
 
@@ -97,7 +146,7 @@ describe("ledger.builder.running TTL memo", function()
     end)
     running.running_steps(ios)
     -- an injected runner must still run (existing unit tests depend on this)
-    running.running_steps(ios, function()
+    running.running_steps(ios, nil, function()
       calls = calls + 1
       return "pnpm mobile e2e:build -c ios.sim.debug\n"
     end)
