@@ -1148,14 +1148,16 @@ end
 -- row shows its current effective value; picking one flips/cycles it, persists
 -- via settings.set, re-applies what a live rebuild() can (spinner cadence reads
 -- cfg() each tick), then REOPENS the menu so several toggles feel like a panel.
--- Some visual options (border/transparent/backdrop) are read only when the
--- Builder float is created, so they take effect on the next open. The two Allure
--- rows delete the active platform's results/report dir (confirm-gated).
+-- Window options (border/transparent/backdrop/loader) are read when the float
+-- is created, so toggling one re-mounts the Builder to apply it immediately. The
+-- two Allure rows delete the active platform's results/report dir (confirm-gated).
 local function settings_menu()
   if not state.root then
     return
   end
   local c = cfg()
+  -- options read only at window-creation time → a re-mount applies them live.
+  local WINDOW_OPTS = { border = true, transparent = true, backdrop = true, loader = true }
   local function on(v)
     return v and "on" or "off"
   end
@@ -1201,10 +1203,27 @@ local function settings_menu()
     elseif id == "allure_report" then
       delete_allure("report", target)
     else
-      -- boolean toggle: flip the effective value, persist, re-apply, reopen.
-      settings.set(id, not c[id])
-      rebuild()
-      settings_menu()
+      -- boolean toggle: flip the effective value + persist, then apply it.
+      local val = not c[id]
+      settings.set(id, val)
+      if id == "substeps_default" then
+        state.show_substeps = val -- apply the new default to the open session
+        rebuild()
+        settings_menu()
+      elseif WINDOW_OPTS[id] then
+        -- border/transparent/backdrop/loader are read when the float is created,
+        -- so re-mount to apply them now. The old window's WinClosed schedules a
+        -- (harmless — state.win is already nil) hide; schedule the re-show AFTER
+        -- it so it can't close the fresh window, then reopen the panel on top.
+        M.hide()
+        vim.schedule(function()
+          M.show()
+          vim.schedule(settings_menu)
+        end)
+      else
+        rebuild()
+        settings_menu()
+      end
     end
   end)
 end
@@ -1670,6 +1689,41 @@ M._opening = false
 
 -- Open the float on the (already-initialised) state.buf and wire it up. Shared
 -- by a fresh build() and a re-show() so toggling preserves state.
+-- Close the dim backdrop window if one is open.
+local function close_backdrop()
+  if state and state.backdrop_win and vim.api.nvim_win_is_valid(state.backdrop_win) then
+    pcall(vim.api.nvim_win_close, state.backdrop_win, true)
+  end
+  if state then
+    state.backdrop_win = nil
+  end
+end
+
+-- A dim, full-editor backdrop behind the Builder float (config.builder.backdrop).
+-- A non-focusable minimal window at a low zindex with a dark, blended background
+-- (mirrors the Jira board's backdrop). The main float sits above it (zindex 50).
+local function open_backdrop()
+  close_backdrop() -- never stack two
+  local buf = vim.api.nvim_create_buf(false, true)
+  local win = vim.api.nvim_open_win(buf, false, {
+    relative = "editor",
+    row = 0,
+    col = 0,
+    width = vim.o.columns,
+    height = vim.o.lines,
+    focusable = false,
+    style = "minimal",
+    border = "none",
+    zindex = 20,
+  })
+  vim.api.nvim_set_hl(0, "LedgerBuilderBackdrop", { bg = "#000000", default = true })
+  vim.wo[win].winhighlight =
+    "Normal:LedgerBuilderBackdrop,NormalFloat:LedgerBuilderBackdrop,EndOfBuffer:LedgerBuilderBackdrop"
+  vim.wo[win].winblend = 40
+  state.backdrop_win = win
+  state.backdrop_buf = buf
+end
+
 local function mount()
   local volt = require("volt")
   local builder_cfg = cfg()
@@ -1679,6 +1733,10 @@ local function mount()
   compute_dims()
   refresh_meta()
   refresh_statuses()
+
+  if builder_cfg.backdrop then
+    open_backdrop() -- dim the editor behind the float (config.builder.backdrop)
+  end
 
   -- a re-shown buffer is still nomodifiable from the prior session; volt.run
   -- needs to write the blank canvas, so re-enable writes before rendering.
@@ -1750,7 +1808,7 @@ local function build()
     watching = false,
     watch_mode = (require("ledger.config").get().builder or {}).watch_default or "on-save",
     substeps = {}, -- per-project rebuild/install rows, keyed by parent step id
-    show_substeps = (require("ledger.config").get().builder or {}).substeps_default ~= false,
+    show_substeps = cfg().substeps_default ~= false, -- overlay-aware (settings menu)
     log_id = nil, -- pinned log (ad-hoc/watch task); cleared on navigation
     side = "left",
     focus_idx = 1,
@@ -1818,6 +1876,7 @@ function M.hide()
   pcall(function()
     require("ledger.builder.ui.loader").close()
   end)
+  close_backdrop()
   if state and state.win and vim.api.nvim_win_is_valid(state.win) then
     pcall(vim.api.nvim_win_close, state.win, true)
   end
@@ -1845,8 +1904,11 @@ function M.close()
     require("ledger.builder.ui.loader").close()
   end)
   if state then
-    local win, buf = state.win, state.buf
+    local win, buf, bwin = state.win, state.buf, state.backdrop_win
     state = nil
+    if bwin and vim.api.nvim_win_is_valid(bwin) then
+      pcall(vim.api.nvim_win_close, bwin, true)
+    end
     if win and vim.api.nvim_win_is_valid(win) then
       pcall(vim.api.nvim_win_close, win, true)
     end
