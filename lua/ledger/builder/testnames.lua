@@ -505,7 +505,7 @@ end
 -- Appends into `acc` (a { seen=, names= } accumulator) so a caller can fold
 -- several specs together. Also resolves any direct-literal titles found in the
 -- source (the Aleo add-account case) via the same accessor machinery.
-local function resolve_shape_b(enums, src, array_name, acc)
+local function resolve_shape_b(enums, src, array_name, acc, spec)
   -- Strip commented-out lines first so a disabled array element (e.g. TON in
   -- add.account.spec.ts) is never scraped as a live test name.
   src = strip_line_comments(src)
@@ -529,6 +529,9 @@ local function resolve_shape_b(enums, src, array_name, acc)
         if not acc.seen[name] then
           acc.seen[name] = true
           acc.names[#acc.names + 1] = name
+          if acc.entries then
+            acc.entries[#acc.entries + 1] = { name = name, spec = spec }
+          end
         end
       end
     end
@@ -567,6 +570,9 @@ local function resolve_shape_b(enums, src, array_name, acc)
         if not acc.seen[name] then
           acc.seen[name] = true
           acc.names[#acc.names + 1] = name
+          if acc.entries then
+            acc.entries[#acc.entries + 1] = { name = name, spec = spec }
+          end
         end
       end
     end
@@ -715,6 +721,102 @@ function M.resolve_desktop(root, opts)
   end
   table.sort(acc.names)
   return acc.names
+end
+
+-- ── run-by-name picker wiring ───────────────────────────────────────────────
+
+-- Concrete names paired with the .spec.ts that runs each, from source strings
+-- (no disk). Pure core of `picker_entries` for unit tests. Each `spec` is the
+-- path relative to the platform's e2e base (what detox/playwright expect):
+--   desktop → sources.specs = { { src=, array=, spec="tests/specs/…" }, … }
+--   mobile  → sources = { currency=, account=, helper=, specs={ { src=, spec="specs/…" } } }
+-- Returns { { name=, spec= }, … } (unsorted; caller sorts/merges).
+function M.picker_entries_from_sources(platform, sources)
+  sources = sources or {}
+  if platform == "desktop" then
+    local enums = {
+      currencies = M.parse_currencies(sources.currency),
+      accounts = M.parse_accounts(sources.account),
+      providers = M.parse_providers(sources.provider),
+    }
+    local acc = { seen = {}, names = {}, entries = {} }
+    for _, spec in ipairs(sources.specs or {}) do
+      resolve_shape_b(enums, spec.src, spec.array, acc, spec.spec)
+    end
+    return acc.entries
+  end
+  local currencies = M.parse_currencies(sources.currency)
+  local accounts = M.parse_accounts(sources.account)
+  local title = M.parse_swap_title(sources.helper)
+  if not title then
+    return {}
+  end
+  local seen, entries = {}, {}
+  for _, spec in ipairs(sources.specs or {}) do
+    for _, call in ipairs(M.parse_swap_calls(spec.src)) do
+      local name = render(title, currencies, accounts, call)
+      if name and not seen[name] then
+        seen[name] = true
+        entries[#entries + 1] = { name = name, spec = spec.spec }
+      end
+    end
+  end
+  return entries
+end
+
+-- Concrete { name, spec } pairs for the run-by-name picker, read from a monorepo
+-- checkout at `root`. `spec` is relative to the platform's e2e base. Returns {}
+-- when the monorepo (or a required source) is absent, so the picker falls back
+-- to its raw title scrape.
+function M.picker_entries(root, platform)
+  if type(root) ~= "string" or root == "" then
+    return {}
+  end
+  local enum_dir = root .. "/" .. ENUM_DIR
+  local currency = read_file(enum_dir .. "/Currency.ts")
+  local account = read_file(enum_dir .. "/Account.ts")
+  if not currency or not account then
+    return {}
+  end
+
+  if platform == "desktop" then
+    local provider = read_file(enum_dir .. "/Provider.ts")
+    if not provider then
+      return {}
+    end
+    local spec_dir = root .. "/" .. DESKTOP_SPEC_DIR
+    local specs = {}
+    for _, entry in ipairs(DESKTOP_SHAPE_B) do
+      local src = read_file(spec_dir .. "/" .. entry.spec)
+      if src then
+        specs[#specs + 1] = { src = src, array = entry.array, spec = "tests/specs/" .. entry.spec }
+      end
+    end
+    return M.picker_entries_from_sources("desktop", {
+      currency = currency,
+      account = account,
+      provider = provider,
+      specs = specs,
+    })
+  end
+
+  local helper = read_file(root .. "/" .. SWAP_DIR .. "/swap.ts")
+  if not helper then
+    return {}
+  end
+  local specs = {}
+  for _, spec in ipairs(vim.fn.glob(root .. "/" .. SWAP_DIR .. "/*.spec.ts", true, true)) do
+    local src = read_file(spec)
+    if src then
+      specs[#specs + 1] = { src = src, spec = "specs/swap/" .. vim.fn.fnamemodify(spec, ":t") }
+    end
+  end
+  return M.picker_entries_from_sources("mobile", {
+    currency = currency,
+    account = account,
+    helper = helper,
+    specs = specs,
+  })
 end
 
 return M

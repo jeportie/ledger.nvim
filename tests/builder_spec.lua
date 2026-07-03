@@ -954,6 +954,39 @@ describe("ledger.builder._enclosing_export", function()
   end)
 end)
 
+describe("ledger.builder._merge_candidates", function()
+  local builder = require("ledger.builder")
+
+  it("drops raw ${…} titles, adds resolved names pinned to their spec", function()
+    local raw = {
+      ["Swap ${x} to ${y}"] = { rel = "specs/swap/swap.ts", is_spec = false },
+      ["settings change language"] = { rel = "tests/specs/settings.spec.ts", is_spec = true },
+    }
+    local entries = {
+      { name = "Swap Bitcoin to Ethereum", spec = "specs/swap/btceth.spec.ts" },
+      { name = "Swap Ethereum to Bitcoin", spec = "specs/swap/ethbtc.spec.ts" },
+    }
+    local names, occ = builder._merge_candidates(raw, entries)
+    -- the unrunnable ${…} template is gone; the literal title stays; the resolved
+    -- concrete names are added (sorted), each pinned to its spec as is_spec
+    assert.same({
+      "Swap Bitcoin to Ethereum",
+      "Swap Ethereum to Bitcoin",
+      "settings change language",
+    }, names)
+    assert.is_nil(occ["Swap ${x} to ${y}"])
+    assert.same({ rel = "specs/swap/btceth.spec.ts", is_spec = true }, occ["Swap Bitcoin to Ethereum"])
+    assert.same({ rel = "tests/specs/settings.spec.ts", is_spec = true }, occ["settings change language"])
+  end)
+
+  it("falls back to the raw scrape when there are no resolver entries", function()
+    local raw = { ["a literal test"] = { rel = "x.spec.ts", is_spec = true } }
+    local names, occ = builder._merge_candidates(raw, {})
+    assert.same({ "a literal test" }, names)
+    assert.equals("x.spec.ts", occ["a literal test"].rel)
+  end)
+end)
+
 describe("ledger.builder controller — focus & navigation", function()
   local builder = require("ledger.builder")
   local panes = require("ledger.builder.ui.panes")
