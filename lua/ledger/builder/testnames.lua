@@ -1,30 +1,62 @@
 -- ledger.builder.testnames
 --
--- POC (issue #51, milestone 1: SWAP only). Statically resolves the Builder's
--- "run test by name" template-literal titles into concrete jest test names.
+-- POC (issues #51 + #57). Statically resolves the Builder's "run test by name"
+-- template-literal titles into concrete jest/Playwright test names.
 --
 -- The Builder's picker (see builder/init.lua `pick_test_name`) scrapes titles
 -- with a regex and passes them verbatim to `-t`/`--grep`. For parameterized
--- suites the title is a template literal, e.g. in e2e/mobile/specs/swap/swap.ts:
+-- suites the title is a template literal, so the picker offers a name with a
+-- literal `${…}` that never matches a run. Two shapes are resolved:
+--
+--   Shape-A (mobile, issue #51) — `runSwapTest(debit, credit, …)` callers, e.g.
+--   in e2e/mobile/specs/swap/swap.ts:
 --     it(`Swap ${accountToDebit.currency.name} to ${accountToCredit.currency.name}`, …)
--- so the picker offers a name with a literal `${…}` that never matches a run.
+--   → "Swap Bitcoin to Ethereum". See `resolve_swap`.
 --
--- This module resolves that ONE shape (Shape-A: `runSwapTest(debit, credit, …)`
--- callers) into concrete names like "Swap Bitcoin to Ethereum" by evaluating the
--- e2e enums statically:
---   Account.ETH_1 → Currency.ETH → "Ethereum"
--- Everything is a PURE function of file contents (or a root path that is read
--- once), so the parsers are unit-testable with tiny inline fixtures — the CI
--- runners do NOT have the monorepo checked out.
+--   Shape-B (desktop, issue #57) — a static array literal + a `for` loop + a
+--   parameterized `test.describe`/`test(\`…${x.prop}\`)` title, e.g. in
+--   e2e/desktop/tests/specs/{provider.swap,add.account}.spec.ts:
+--     for (const { provider } of providerFlowTests)
+--       test.describe(`Swap - ${provider.uiName} flow`, …)   → "Swap - 1inch flow"
+--     for (const currency of currencies)
+--       test(`[${currency.currency.name}] Add account`, …)   → "[Bitcoin] Add account"
+--   → See `resolve_desktop`.
 --
--- Deferred (NOT this PR): wiring into the picker; earn/stake and other helpers;
--- desktop specs; ternary titles (e.g. the XRP amount branch inside the body).
+-- Both resolve by evaluating the e2e enums statically (Account.ETH_1 →
+-- Currency.ETH → "Ethereum"; SwapProvider.ONE_INCH → uiName "1inch"). Everything
+-- is a PURE function of file contents (or a root read once), so the parsers are
+-- unit-testable with tiny inline fixtures — the CI runners do NOT have the
+-- monorepo checked out.
+--
+-- Deferred (NOT this PR): wiring into the picker (mobile+desktop, `-t`/`--grep`
+-- escaping); model wrappers (Delegate/Transaction/Swap/BuySell) and nested
+-- `speculosApp.name`; validation.swap.spec.ts (RegExp interpolation); ternary
+-- titles (e.g. the XRP amount branch inside the swap body).
 
 local uv = vim.uv or vim.loop
 
 local M = {}
 
 -- ── low-level helpers ──────────────────────────────────────────────────────
+
+-- Drop whole-line `//` comments (lines whose first non-space char is `//`) so a
+-- commented-out array element — e.g. the disabled `// { currency: Currency.TON,
+-- … }` in add.account.spec.ts — is not scraped as a live entry. We only strip
+-- FULL comment lines, never inline `//`, to avoid touching a `//` that might sit
+-- inside a string/template literal on a code line. Returns the source unchanged
+-- when given a non-string.
+local function strip_line_comments(src)
+  if type(src) ~= "string" then
+    return src
+  end
+  local kept = {}
+  for line in (src .. "\n"):gmatch("(.-)\n") do
+    if not line:match("^%s*//") then
+      kept[#kept + 1] = line
+    end
+  end
+  return table.concat(kept, "\n")
+end
 
 -- Read a file into a single string, or nil if absent/unreadable. Kept tiny so
 -- callers can inject contents directly in tests instead of touching disk.
@@ -199,11 +231,383 @@ local function render(title, currencies, accounts, call)
   return string.format(title.template, unpack(values))
 end
 
+-- ── DESKTOP "Shape-B": array literal → for-loop → parameterized title ───────
+--
+-- Desktop specs (issue #57, milestone 1) parameterize differently from the
+-- mobile Shape-A helper. Instead of `runSwapTest(a, b, …)` calls they declare a
+-- static array of object literals and loop over it, building the Playwright
+-- title from a field of each element. Two pure shapes are covered:
+--
+--   e2e/desktop/tests/specs/provider.swap.spec.ts
+--     const providerFlowTests = [
+--       { fromAccount: …, provider: SwapProvider.ONE_INCH, … },
+--       { …,             provider: SwapProvider.OKX,       … },
+--     ];
+--     for (const { fromAccount, toAccount, provider, … } of providerFlowTests) {
+--       test.describe(`Swap - ${provider.uiName} flow`, …)   // → "Swap - 1inch flow"
+--
+--   e2e/desktop/tests/specs/add.account.spec.ts
+--     const currencies = [ { currency: Currency.BTC, … }, … Currency.ZEC ];
+--     for (const currency of currencies) {
+--       test(`[${currency.currency.name}] Add account`, …)   // → "[Bitcoin] Add account"
+--     }
+--     // plus a direct-literal title outside the loop:
+--     test(`[${Currency.ALEO.name}] Add account`, …)         // → "[Aleo] Add account"
+--
+-- Everything is a PURE function of file contents, unit-testable with inline
+-- fixtures. The enum evaluators reuse `parse_currencies`/`parse_accounts`; a new
+-- `parse_providers` covers `SwapProvider`/`EarnProvider`. Only the exact accessor
+-- written in the template is honored (swap uses `.uiName`, earn uses `.name`), so
+-- we never emit a name resolved against the wrong property.
+
+-- Enum-class names whose `Class.SYM` references we recognise inside array object
+-- literals and direct-literal titles. Value = the map "family" used to resolve a
+-- leaf accessor against the parsed enum tables (see `resolve_enum_leaf`).
+local ENUM_CLASSES = {
+  Currency = "currency",
+  Account = "account",
+  TokenAccount = "account",
+  SwapProvider = "provider",
+  EarnProvider = "provider",
+  BuySellProvider = "provider",
+}
+
+-- Parse provider enums (`SwapProvider`/`EarnProvider`/`BuySellProvider`) →
+--   { name = { SYM = "<name>" }, uiName = { SYM = "<uiName>" } }
+-- Every provider's first two ctor string literals are (name, uiName) — the base
+-- ctor is `(name, uiName)` and the subclasses pass extra flags AFTER those two.
+-- We anchor on `= new <Provider>(` and capture the first two double-quoted
+-- literals, exactly like `parse_currencies`. So SwapProvider.ONE_INCH →
+-- name="oneinch", uiName="1inch"; EarnProvider.LIDO → name="lido", uiName="Lido".
+function M.parse_providers(src)
+  local name, uiName = {}, {}
+  if type(src) ~= "string" then
+    return { name = name, uiName = uiName }
+  end
+  local ctor = "readonly%s+([%w_]+)%s*=%s*new%s+%w*Provider%((.-)%)%s*;"
+  for sym, args in src:gmatch(ctor) do
+    local lits = {}
+    for lit in args:gmatch('"([^"]*)"') do
+      lits[#lits + 1] = lit
+      if #lits == 2 then
+        break
+      end
+    end
+    if lits[1] then
+      name[sym] = lits[1]
+    end
+    if lits[2] then
+      uiName[sym] = lits[2]
+    end
+  end
+  return { name = name, uiName = uiName }
+end
+
+-- An "enums" bundle groups every parsed enum family so a single accessor
+-- resolver can walk any `Class.SYM.leaf` chain. `accounts` join through
+-- currencies (an account has no display name of its own).
+--   enums = { currencies = <parse_currencies>, accounts = <parse_accounts>,
+--             providers = <parse_providers> }
+
+-- Resolve a leaf accessor against an enum reference. `class` is the JS class
+-- name (e.g. "Currency"), `sym` the member (e.g. "BTC"), `leaf` the trailing
+-- property (e.g. "name"/"ticker"/"uiName"). Returns the concrete string or nil.
+local function resolve_enum_leaf(enums, class, sym, leaf)
+  local family = ENUM_CLASSES[class]
+  if family == "currency" then
+    local c = enums.currencies or {}
+    if leaf == "name" then
+      return c.name and c.name[sym]
+    elseif leaf == "ticker" then
+      return c.ticker and c.ticker[sym]
+    end
+  elseif family == "account" then
+    -- Accounts expose `.currency.<leaf>`: the account's currency symbol joined
+    -- through the currency table. The caller passes the post-account leaf, so a
+    -- template `${x.currency.name}` where x is an Account arrives here as
+    -- class="Account", leaf handled one level up (see resolve_accessor).
+    local cur = enums.accounts and enums.accounts[sym]
+    if not cur then
+      return nil
+    end
+    return resolve_enum_leaf(enums, "Currency", cur, leaf)
+  elseif family == "provider" then
+    local p = enums.providers or {}
+    if leaf == "uiName" then
+      return p.uiName and p.uiName[sym]
+    elseif leaf == "name" then
+      return p.name and p.name[sym]
+    end
+  end
+  return nil
+end
+
+-- Parse a `const NAME = [ … ];` array of OBJECT LITERALS whose fields hold enum
+-- refs. Returns `name, elements` where `elements` is an ordered list of
+-- `{ field = { class=, sym= }, … }` maps (only enum-ref fields are kept; string
+-- fields like xrayTicket are ignored). Returns nil if `array_name` isn't found.
+-- `array_name` may be nil to grab the FIRST top-level `const … = [ … ]`.
+function M.parse_object_array(src, array_name)
+  if type(src) ~= "string" then
+    return nil
+  end
+  local pat = array_name and ("const%s+" .. array_name .. "%s*=%s*%[(.-)%]%s*;") or "const%s+[%w_]+%s*=%s*%[(.-)%]%s*;"
+  local body = src:match(pat)
+  if not body then
+    return nil, {}
+  end
+  local elements = {}
+  -- Each top-level `{ … }` is one element. Object literals here don't nest
+  -- braces (they hold enum refs, strings, arrays), so a non-greedy `{(.-)}`
+  -- captures one element's fields at a time.
+  for obj in body:gmatch("{(.-)}") do
+    local fields = {}
+    for key, class, sym in obj:gmatch("([%w_]+)%s*:%s*([%w_]+)%.([%w_]+)") do
+      if ENUM_CLASSES[class] then
+        fields[key] = { class = class, sym = sym }
+      end
+    end
+    if next(fields) then
+      elements[#elements + 1] = fields
+    end
+  end
+  return array_name or true, elements
+end
+
+-- Parse the `for (const <binding> of NAME) { … }` header that iterates an array,
+-- plus the FIRST parameterized title inside it. Returns
+--   { array = "NAME", binding = { kind = "destructure"|"ident",
+--                                 fields = { "provider", … } | var = "currency" },
+--     template = "Swap - %s flow", accessors = { {var=…, path={…}} } }
+-- where `template` has each understood `${…}` replaced by `%s` and `accessors`
+-- lists, per slot, the split accessor (var = head identifier, path = the
+-- remaining dotted segments). Returns nil if no such loop/title is found or the
+-- title contains an interpolation we can't statically resolve.
+--
+-- Both `test.describe(\`…\`)` and `test(\`…\`)` titles are accepted (desktop uses
+-- describe for the swap flow and test for add-account). Direct-literal titles
+-- (`${Class.SYM.leaf}`) are also allowed inside the loop and are resolved without
+-- the binding (see resolve_shape_b).
+function M.parse_loop_title(src, array_name)
+  if type(src) ~= "string" then
+    return nil
+  end
+  -- Loop header: `for (const <binding> of <NAME>)`. Binding is either
+  -- `{ a, b, c }` or a bare identifier.
+  local binding_src, arr
+  for b, a in src:gmatch("for%s*%(%s*const%s+(.-)%s+of%s+([%w_]+)%s*%)") do
+    if not array_name or a == array_name then
+      binding_src, arr = b, a
+      break
+    end
+  end
+  if not binding_src then
+    return nil
+  end
+
+  local binding
+  local destructured = binding_src:match("^%s*{%s*(.-)%s*}%s*$")
+  if destructured then
+    local fields = {}
+    for f in destructured:gmatch("[%w_]+") do
+      fields[#fields + 1] = f
+    end
+    binding = { kind = "destructure", fields = fields }
+  else
+    local ident = binding_src:match("^%s*([%w_]+)%s*$")
+    if not ident then
+      return nil
+    end
+    binding = { kind = "ident", var = ident }
+  end
+
+  -- First title after the loop header: test.describe(`…`) or test(`…`).
+  local rest = src:sub((src:find("for%s*%(%s*const")) or 1)
+  local raw = rest:match("test%.describe%(%s*`([^`]*)`") or rest:match("test%(%s*`([^`]*)`")
+  if not raw then
+    return nil
+  end
+
+  local accessors = {}
+  local ok = true
+  local template = raw:gsub("%${([^}]*)}", function(expr)
+    local chain = expr:match("^%s*([%w_%.]+)%s*$")
+    if not chain then
+      ok = false
+      return "${" .. expr .. "}"
+    end
+    local segs = {}
+    for s in chain:gmatch("[%w_]+") do
+      segs[#segs + 1] = s
+    end
+    if #segs < 2 then
+      ok = false
+      return "${" .. expr .. "}"
+    end
+    accessors[#accessors + 1] = { head = segs[1], path = { unpack(segs, 2) } }
+    return "\0"
+  end)
+  if not ok then
+    return nil
+  end
+  template = template:gsub("%%", "%%%%"):gsub("%z", "%%s")
+  return {
+    array = arr,
+    binding = binding,
+    template = template,
+    accessors = accessors,
+  }
+end
+
+-- Resolve ONE accessor (head + dotted path) for ONE array element to a concrete
+-- string. `enums` is the parsed bundle; `binding` describes the loop variable;
+-- `element` is a `field → {class,sym}` map. Handles:
+--   * destructured loop `{ provider }`, accessor `provider.uiName`:
+--       head "provider" is a field → its enum ref; path {"uiName"} = leaf.
+--   * plain loop `currency`, accessor `currency.currency.name`:
+--       head "currency" == loop var (the element); next "currency" is a field →
+--       enum ref; remaining {"name"} = leaf.
+--   * direct literal `Currency.ALEO.name` (binding ignored):
+--       head "Currency" is a known class; next "ALEO" = sym; remaining = leaf.
+local function resolve_accessor(enums, binding, element, acc)
+  local head, path = acc.head, acc.path
+
+  -- Direct enum literal: head is a class name (Currency.ALEO.name).
+  if ENUM_CLASSES[head] and path[1] then
+    local sym = path[1]
+    local leaf = path[#path]
+    return resolve_enum_leaf(enums, head, sym, leaf)
+  end
+
+  -- Loop-bound accessor. Determine which field of the element the ref lives in
+  -- and what the leaf accessor is.
+  local field, leaf
+  if binding.kind == "destructure" then
+    -- head IS the field (e.g. "provider"); path holds the enum leaf(s).
+    field, leaf = head, path[#path]
+  else
+    -- head must be the loop var (whole element); the FIRST path segment is the
+    -- field, and the last is the leaf.
+    if head ~= binding.var or not path[1] then
+      return nil
+    end
+    field, leaf = path[1], path[#path]
+  end
+
+  local ref = element and element[field]
+  if not ref then
+    return nil
+  end
+  return resolve_enum_leaf(enums, ref.class, ref.sym, leaf)
+end
+
+-- Render every concrete title for a Shape-B (array + loop + template) unit.
+-- Appends into `acc` (a { seen=, names= } accumulator) so a caller can fold
+-- several specs together. Also resolves any direct-literal titles found in the
+-- source (the Aleo add-account case) via the same accessor machinery.
+local function resolve_shape_b(enums, src, array_name, acc)
+  -- Strip commented-out lines first so a disabled array element (e.g. TON in
+  -- add.account.spec.ts) is never scraped as a live test name.
+  src = strip_line_comments(src)
+  local _, elements = M.parse_object_array(src, array_name)
+  local loop = M.parse_loop_title(src, array_name)
+
+  -- 1) Loop-driven titles: one per array element.
+  if loop and elements then
+    for _, element in ipairs(elements) do
+      local values, complete = {}, true
+      for _, a in ipairs(loop.accessors) do
+        local v = resolve_accessor(enums, loop.binding, element, a)
+        if not v then
+          complete = false
+          break
+        end
+        values[#values + 1] = v
+      end
+      if complete then
+        local name = string.format(loop.template, unpack(values))
+        if not acc.seen[name] then
+          acc.seen[name] = true
+          acc.names[#acc.names + 1] = name
+        end
+      end
+    end
+  end
+
+  -- 2) Direct-literal titles: test(`…${Class.SYM.leaf}…`) NOT inside the loop
+  -- (e.g. the Aleo add-account block). We scan every backtick title whose
+  -- interpolations are ALL direct enum literals; loop-bound titles are skipped
+  -- here because their head isn't a known enum class.
+  for raw in src:gmatch("test%(%s*`([^`]*)`") do
+    if raw:find("%${") then
+      local values, all_direct, any = {}, true, false
+      local template = raw:gsub("%${([^}]*)}", function(expr)
+        any = true
+        local chain = expr:match("^%s*([%w_%.]+)%s*$")
+        local head = chain and chain:match("^([%w_]+)")
+        if not head or not ENUM_CLASSES[head] then
+          all_direct = false
+          return ""
+        end
+        local segs = {}
+        for s in chain:gmatch("[%w_]+") do
+          segs[#segs + 1] = s
+        end
+        local v = resolve_enum_leaf(enums, segs[1], segs[2], segs[#segs])
+        if not v then
+          all_direct = false
+          return ""
+        end
+        values[#values + 1] = v
+        return "\0"
+      end)
+      if any and all_direct then
+        template = template:gsub("%%", "%%%%"):gsub("%z", "%%s")
+        local name = string.format(template, unpack(values))
+        if not acc.seen[name] then
+          acc.seen[name] = true
+          acc.names[#acc.names + 1] = name
+        end
+      end
+    end
+  end
+end
+
+-- Pure Shape-B end-to-end from source strings (no disk). Mirrors
+-- `resolve_swap_from_sources` for unit tests.
+--   sources = { currency=, account=, provider=, specs = { { src=, array= }, … } }
+-- Each spec entry names its array (or nil for the first `const … = [ … ]`).
+function M.resolve_desktop_from_sources(sources)
+  sources = sources or {}
+  local enums = {
+    currencies = M.parse_currencies(sources.currency),
+    accounts = M.parse_accounts(sources.account),
+    providers = M.parse_providers(sources.provider),
+  }
+  local acc = { seen = {}, names = {} }
+  for _, spec in ipairs(sources.specs or {}) do
+    resolve_shape_b(enums, spec.src, spec.array, acc)
+  end
+  table.sort(acc.names)
+  return acc.names
+end
+
 -- ── public entry point ─────────────────────────────────────────────────────
 
 -- Default monorepo-relative locations (verified against the 2026-04-08 checkout).
 local ENUM_DIR = "libs/ledger-live-common/src/e2e/enum"
 local SWAP_DIR = "e2e/mobile/specs/swap"
+
+-- Desktop Shape-B (issue #57, milestone 1). Scoped to the two PUREST specs.
+-- Each entry names the spec file (relative to the desktop specs dir) and the
+-- array variable the resolver's loop iterates. Kept explicit rather than
+-- globbing so M1's output is exactly the validated golden set; broadening to
+-- more specs is a follow-up.
+local DESKTOP_SPEC_DIR = "e2e/desktop/tests/specs"
+local DESKTOP_SHAPE_B = {
+  { spec = "provider.swap.spec.ts", array = "providerFlowTests" },
+  { spec = "add.account.spec.ts", array = "currencies" },
+}
 
 -- Resolve every Shape-A swap test name from a monorepo checkout at `root`.
 -- Returns a SORTED, de-duplicated list of concrete names. `opts` (optional):
@@ -272,6 +676,45 @@ function M.resolve_swap_from_sources(sources)
   end
   table.sort(names)
   return names
+end
+
+-- Resolve every DESKTOP Shape-B test name from a monorepo checkout at `root`.
+-- Returns a SORTED, de-duplicated list of concrete names for the M1-scoped specs
+-- (see DESKTOP_SHAPE_B). Reads the shared enum tables once, then folds each spec.
+-- `opts` (optional): { enum_dir=, spec_dir=, currency_file=, account_file=,
+--   provider_file=, specs= } to override paths/scope (used by tests / future
+--   callers). Returns {} on any missing input, so an empty result means
+--   "monorepo unavailable".
+function M.resolve_desktop(root, opts)
+  opts = opts or {}
+  if type(root) ~= "string" or root == "" then
+    return {}
+  end
+  local enum_dir = opts.enum_dir or (root .. "/" .. ENUM_DIR)
+  local spec_dir = opts.spec_dir or (root .. "/" .. DESKTOP_SPEC_DIR)
+
+  local currency_src = read_file(opts.currency_file or (enum_dir .. "/Currency.ts"))
+  local account_src = read_file(opts.account_file or (enum_dir .. "/Account.ts"))
+  local provider_src = read_file(opts.provider_file or (enum_dir .. "/Provider.ts"))
+  if not currency_src or not account_src or not provider_src then
+    return {}
+  end
+
+  local enums = {
+    currencies = M.parse_currencies(currency_src),
+    accounts = M.parse_accounts(account_src),
+    providers = M.parse_providers(provider_src),
+  }
+
+  local acc = { seen = {}, names = {} }
+  for _, entry in ipairs(opts.specs or DESKTOP_SHAPE_B) do
+    local spec_src = read_file(spec_dir .. "/" .. entry.spec)
+    if spec_src then
+      resolve_shape_b(enums, spec_src, entry.array, acc)
+    end
+  end
+  table.sort(acc.names)
+  return acc.names
 end
 
 return M

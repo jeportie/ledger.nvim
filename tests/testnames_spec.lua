@@ -217,6 +217,266 @@ describe("ledger.builder.testnames", function()
     end)
   end)
 
+  -- ══ DESKTOP "Shape-B": array literal → for-loop → parameterized title ═════
+  --
+  -- All unit tests use tiny INLINE fixtures (CI has no monorepo). A single
+  -- integration test at the bottom validates against a real checkout / the
+  -- 19-name CI golden fixture and pending()s otherwise.
+
+  -- ── provider enum evaluator ─────────────────────────────────────────────
+  describe("parse_providers", function()
+    it("captures name + uiName from a SwapProvider (extra ctor flags after)", function()
+      -- SwapProvider ctor is (name, uiName, kyc, availableOnLns, addr?, app?) —
+      -- only the first two string literals are name/uiName.
+      local p = tn.parse_providers([[
+        static readonly ONE_INCH = new SwapProvider(
+          "oneinch", "1inch", false, true, "0x1111", AppInfos.ONE_INCH);
+        static readonly OKX = new SwapProvider("okx", "OKX", false, false, "0x40aa", AppInfos.ETHEREUM);
+      ]])
+      assert.equals("oneinch", p.name.ONE_INCH)
+      assert.equals("1inch", p.uiName.ONE_INCH)
+      assert.equals("OKX", p.uiName.OKX)
+    end)
+
+    it("captures an EarnProvider declared with the 2-arg base ctor", function()
+      local p = tn.parse_providers([[
+        static readonly LIDO = new EarnProvider("lido", "Lido");
+        static readonly KILN = new EarnProvider("kiln_pooling", "Kiln staking Pool");
+      ]])
+      assert.equals("lido", p.name.LIDO)
+      assert.equals("kiln_pooling", p.name.KILN)
+      assert.equals("Lido", p.uiName.LIDO)
+    end)
+
+    it("returns empty maps for non-string / empty input", function()
+      assert.same({ name = {}, uiName = {} }, tn.parse_providers(nil))
+      assert.same({ name = {}, uiName = {} }, tn.parse_providers(""))
+    end)
+  end)
+
+  -- ── array-of-object-literals parsing ────────────────────────────────────
+  describe("parse_object_array", function()
+    it("extracts enum-ref fields from each object literal (named array)", function()
+      local _, els = tn.parse_object_array(
+        [[
+        const providerFlowTests = [
+          { fromAccount: Account.ETH_1, provider: SwapProvider.ONE_INCH, xrayTicket: "B2CQA-3120" },
+          { fromAccount: TokenAccount.ETH_USDT_1, provider: SwapProvider.OKX, xrayTicket: "B2CQA-4728" },
+        ];
+      ]],
+        "providerFlowTests"
+      )
+      assert.equals(2, #els)
+      assert.same({ class = "SwapProvider", sym = "ONE_INCH" }, els[1].provider)
+      assert.same({ class = "Account", sym = "ETH_1" }, els[1].fromAccount)
+      assert.same({ class = "SwapProvider", sym = "OKX" }, els[2].provider)
+      -- string fields (xrayTicket) are ignored, not stored as refs.
+      assert.is_nil(els[1].xrayTicket)
+    end)
+
+    it("ignores object fields whose value is not a known enum class", function()
+      local _, els = tn.parse_object_array("const a = [ { currency: Currency.BTC, foo: Bar.BAZ } ];", "a")
+      assert.same({ class = "Currency", sym = "BTC" }, els[1].currency)
+      assert.is_nil(els[1].foo)
+    end)
+
+    it("returns nil name when the named array is absent", function()
+      local name = tn.parse_object_array("const other = [];", "missing")
+      assert.is_nil(name)
+    end)
+  end)
+
+  -- ── for-loop header + parameterized title parsing ────────────────────────
+  describe("parse_loop_title", function()
+    it("parses a DESTRUCTURED loop + test.describe title (swap flow)", function()
+      local loop = tn.parse_loop_title(
+        [[
+        for (const { fromAccount, toAccount, provider } of providerFlowTests) {
+          test.describe(`Swap - ${provider.uiName} flow`, () => {});
+        }
+      ]],
+        "providerFlowTests"
+      )
+      assert.equals("providerFlowTests", loop.array)
+      assert.equals("destructure", loop.binding.kind)
+      assert.same({ "fromAccount", "toAccount", "provider" }, loop.binding.fields)
+      assert.equals("Swap - %s flow", loop.template)
+      assert.same({ { head = "provider", path = { "uiName" } } }, loop.accessors)
+    end)
+
+    it("parses a PLAIN-IDENT loop + test() title (add account)", function()
+      local loop = tn.parse_loop_title(
+        [[
+        for (const currency of currencies) {
+          test(`[${currency.currency.name}] Add account`, () => {});
+        }
+      ]],
+        "currencies"
+      )
+      assert.equals("ident", loop.binding.kind)
+      assert.equals("currency", loop.binding.var)
+      assert.equals("[%s] Add account", loop.template)
+      assert.same({ { head = "currency", path = { "currency", "name" } } }, loop.accessors)
+    end)
+
+    it("returns nil when the loop or a resolvable title is absent", function()
+      assert.is_nil(tn.parse_loop_title("const x = [];", "x"))
+      assert.is_nil(tn.parse_loop_title(nil))
+    end)
+  end)
+
+  -- ── full mini Shape-B end-to-end (pure, no disk) ─────────────────────────
+  describe("resolve_desktop_from_sources", function()
+    it("resolves a destructured provider flow → 'Swap - <uiName> flow'", function()
+      local names = tn.resolve_desktop_from_sources({
+        provider = [[
+          static readonly ONE_INCH = new SwapProvider("oneinch", "1inch", false, true);
+          static readonly OKX = new SwapProvider("okx", "OKX", false, false);
+        ]],
+        specs = {
+          {
+            array = "providerFlowTests",
+            src = [[
+              const providerFlowTests = [
+                { fromAccount: Account.ETH_1, provider: SwapProvider.ONE_INCH },
+                { fromAccount: Account.ETH_1, provider: SwapProvider.OKX },
+              ];
+              for (const { fromAccount, provider } of providerFlowTests) {
+                test.describe(`Swap - ${provider.uiName} flow`, () => {});
+              }
+            ]],
+          },
+        },
+      })
+      assert.same({ "Swap - 1inch flow", "Swap - OKX flow" }, names)
+    end)
+
+    it("resolves a plain-ident currency loop → '[<name>] Add account'", function()
+      local names = tn.resolve_desktop_from_sources({
+        currency = [[
+          static readonly BTC = new Currency("Bitcoin", "BTC", "bitcoin", A, []);
+          static readonly ETH = new Currency("Ethereum", "ETH", "ethereum", A, []);
+        ]],
+        specs = {
+          {
+            array = "currencies",
+            src = [[
+              const currencies = [
+                { currency: Currency.BTC, xrayTicket: "X" },
+                { currency: Currency.ETH, xrayTicket: "Y" },
+              ];
+              for (const currency of currencies) {
+                test(`[${currency.currency.name}] Add account`, () => {});
+              }
+            ]],
+          },
+        },
+      })
+      assert.same({ "[Bitcoin] Add account", "[Ethereum] Add account" }, names)
+    end)
+
+    it("resolves a direct-literal title outside the loop (Aleo case)", function()
+      local names = tn.resolve_desktop_from_sources({
+        currency = 'static readonly ALEO = new Currency("Aleo", "ALEO", "aleo", A, []);',
+        specs = {
+          {
+            array = "currencies",
+            src = [[
+              test(`[${Currency.ALEO.name}] Add account`, () => {});
+            ]],
+          },
+        },
+      })
+      assert.same({ "[Aleo] Add account" }, names)
+    end)
+
+    it("uses the EXACT accessor: earn uses .name, not .uiName", function()
+      local names = tn.resolve_desktop_from_sources({
+        provider = 'static readonly LIDO = new EarnProvider("lido", "Lido");',
+        specs = {
+          {
+            array = "earnFlows",
+            src = [[
+              const earnFlows = [ { provider: EarnProvider.LIDO } ];
+              for (const { provider } of earnFlows) {
+                test.describe(`Stake via ${provider.name}`, () => {});
+              }
+            ]],
+          },
+        },
+      })
+      -- .name → "lido" (NOT the uiName "Lido"): proves the accessor is honored.
+      assert.same({ "Stake via lido" }, names)
+    end)
+
+    it("skips an element whose enum ref can't be resolved (no half-name)", function()
+      local names = tn.resolve_desktop_from_sources({
+        currency = 'static readonly BTC = new Currency("Bitcoin", "BTC", "bitcoin", A, []);',
+        specs = {
+          {
+            array = "currencies",
+            src = [[
+              const currencies = [
+                { currency: Currency.BTC },
+                { currency: Currency.UNKNOWN },
+              ];
+              for (const currency of currencies) {
+                test(`[${currency.currency.name}] Add account`, () => {});
+              }
+            ]],
+          },
+        },
+      })
+      assert.same({ "[Bitcoin] Add account" }, names)
+    end)
+
+    it("ignores a commented-out array element (disabled currency)", function()
+      local names = tn.resolve_desktop_from_sources({
+        currency = [[
+          static readonly BTC = new Currency("Bitcoin", "BTC", "bitcoin", A, []);
+          static readonly TON = new Currency("Gram", "GRAM", "ton", A, []);
+        ]],
+        specs = {
+          {
+            array = "currencies",
+            src = [[
+              const currencies = [
+                { currency: Currency.BTC },
+                // { currency: Currency.TON },
+              ];
+              for (const currency of currencies) {
+                test(`[${currency.currency.name}] Add account`, () => {});
+              }
+            ]],
+          },
+        },
+      })
+      assert.same({ "[Bitcoin] Add account" }, names)
+    end)
+
+    it("coverage: no resolved desktop name contains a residual '${'", function()
+      local names = tn.resolve_desktop_from_sources({
+        currency = 'static readonly BTC = new Currency("Bitcoin", "BTC", "bitcoin", A, []);',
+        provider = 'static readonly OKX = new SwapProvider("okx", "OKX", false, false);',
+        specs = {
+          {
+            array = "currencies",
+            src = [[
+              const currencies = [ { currency: Currency.BTC } ];
+              for (const currency of currencies) {
+                test(`[${currency.currency.name}] Add account`, () => {});
+              }
+            ]],
+          },
+        },
+      })
+      assert.is_true(#names > 0)
+      for _, n in ipairs(names) do
+        assert.is_nil(n:find("${", 1, true), "residual template var in: " .. n)
+      end
+    end)
+  end)
+
   -- ── monorepo integration (skips cleanly without a checkout) ──────────────
   describe("resolve_swap (monorepo)", function()
     -- Prefer an explicit override; else fall back to the known local checkout.
@@ -265,6 +525,73 @@ describe("ledger.builder.testnames", function()
       -- CI — this assertion only runs locally where the monorepo exists.)
       for _, n in ipairs(names) do
         assert.is_true(golden[n] == true, "resolved name not in CI golden set: " .. n)
+      end
+    end)
+  end)
+
+  -- ── desktop monorepo integration (skips cleanly without a checkout) ──────
+  describe("resolve_desktop (monorepo)", function()
+    local ROOT = os.getenv("LEDGER_LIVE_ROOT")
+    if not ROOT or ROOT == "" then
+      ROOT = vim.fn.expand("~/src/tries/2026-04-08-LedgerHQ-ledger-live")
+    end
+    local enum_dir = ROOT .. "/libs/ledger-live-common/src/e2e/enum"
+    local spec_dir = ROOT .. "/e2e/desktop/tests/specs"
+    local have_monorepo = vim.fn.isdirectory(ROOT) == 1
+      and vim.fn.filereadable(enum_dir .. "/Currency.ts") == 1
+      and vim.fn.filereadable(enum_dir .. "/Provider.ts") == 1
+      and vim.fn.filereadable(spec_dir .. "/provider.swap.spec.ts") == 1
+      and vim.fn.filereadable(spec_dir .. "/add.account.spec.ts") == 1
+
+    -- Load the 19-name desktop golden fixture (next to this spec file).
+    local function load_golden()
+      local here = debug.getinfo(1, "S").source:sub(2)
+      local dir = vim.fn.fnamemodify(here, ":h")
+      local golden = {}
+      for _, line in ipairs(vim.fn.readfile(dir .. "/fixtures/ci_desktop_golden.txt")) do
+        if line ~= "" then
+          golden[line] = true
+        end
+      end
+      return golden
+    end
+
+    it("resolves the two M1 specs → the 19 CI golden names (or skips)", function()
+      if not have_monorepo then
+        pending("monorepo not present at " .. ROOT .. " (set LEDGER_LIVE_ROOT)")
+        return
+      end
+      local names = tn.resolve_desktop(ROOT)
+      local golden = load_golden()
+
+      -- Compared as a SET (order is not load-bearing; the fixture is byte-sorted
+      -- like the resolver's output but the assertion doesn't depend on it).
+      local got = {}
+      for _, n in ipairs(names) do
+        got[n] = true
+      end
+      for _, n in ipairs(names) do
+        assert.is_true(golden[n] == true, "resolved name not in desktop golden set: " .. n)
+      end
+      for g in pairs(golden) do
+        assert.is_true(got[g] == true, "golden name not produced by resolver: " .. g)
+      end
+      assert.equals(19, #names, "expected exactly the 19 M1 desktop names, got " .. #names)
+    end)
+
+    it("every resolved desktop name is well-formed with no residual '${'", function()
+      if not have_monorepo then
+        pending("monorepo not present at " .. ROOT)
+        return
+      end
+      local names = tn.resolve_desktop(ROOT)
+      for _, n in ipairs(names) do
+        -- coverage metric: 0 titles retain an unresolved template var.
+        assert.is_nil(n:find("${", 1, true), "residual template var in: " .. n)
+        assert.is_truthy(
+          n:match("^Swap %- .+ flow$") or n:match("^%[.+%] Add account$"),
+          "malformed desktop name: " .. n
+        )
       end
     end)
   end)
