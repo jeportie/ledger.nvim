@@ -166,7 +166,7 @@ local function refresh_statuses()
     end,
   }
   -- steps whose command is running in ANY terminal (cross-session in-progress)
-  local running = require("ledger.builder.running").running_steps(state.steps)
+  local running = require("ledger.builder.running").running_steps(state.steps, state.root)
   state.statuses = {}
   for _, step in ipairs(state.steps) do
     if (step.template and tasks.is_running(step.template)) or running[step.id] then
@@ -274,7 +274,7 @@ local function refresh_runtime()
   end)
   -- in-progress detection uses the (TTL-memoised) process scan + managed tasks,
   -- not the async liveness probe, so it stays synchronous and cheap.
-  local running = require("ledger.builder.running").running_steps(state.steps)
+  local running = require("ledger.builder.running").running_steps(state.steps, state.root)
   local finished = false
   for _, step in ipairs(state.steps or {}) do
     if (step.template and tasks.is_running(step.template)) or running[step.id] then
