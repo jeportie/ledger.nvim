@@ -56,6 +56,15 @@ M.desktop = {
     nx_project = "@ledgerhq/live-cli",
   },
   {
+    id = "e2e_shared",
+    label = "build e2e-shared",
+    template = "shared.e2e_shared.build",
+    artifact = "e2e/shared/lib/index.js",
+    sources = { "e2e/shared/src" },
+    match = "live%-e2e%-shared",
+    nx_project = "@ledgerhq/live-e2e-shared",
+  },
+  {
     id = "build",
     label = "build:testing",
     template = "desktop.build.testing",
@@ -103,6 +112,15 @@ M.ios = {
     match = "mobile pod",
   },
   {
+    id = "e2e_shared",
+    label = "build e2e-shared",
+    template = "shared.e2e_shared.build",
+    artifact = "e2e/shared/lib/index.js",
+    sources = { "e2e/shared/src" },
+    match = "live%-e2e%-shared",
+    nx_project = "@ledgerhq/live-e2e-shared",
+  },
+  {
     id = "build",
     label = "e2e:build ios.sim.debug",
     template = "mobile.detox.build",
@@ -141,6 +159,15 @@ M.android = {
     template = "mobile.build.cli",
     match = "build:cli",
     nx_project = "@ledgerhq/live-cli",
+  },
+  {
+    id = "e2e_shared",
+    label = "build e2e-shared",
+    template = "shared.e2e_shared.build",
+    artifact = "e2e/shared/lib/index.js",
+    sources = { "e2e/shared/src" },
+    match = "live%-e2e%-shared",
+    nx_project = "@ledgerhq/live-e2e-shared",
   },
   {
     id = "build",

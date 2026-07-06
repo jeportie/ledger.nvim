@@ -199,6 +199,12 @@ describe("ledger.tasks.templates", function()
       assert.is_truthy(sim:find("xcodebuild -downloadPlatform iOS", 1, true)) -- install hint
     end)
 
+    it("e2e-shared build template targets the extracted package", function()
+      local spec = templates.resolve("shared.e2e_shared.build", {}, ROOT)
+      assert.equals("pnpm nx build @ledgerhq/live-e2e-shared", spec.cmd)
+      assert.equals(ROOT, spec.cwd) -- runs from the repo root
+    end)
+
     it("lib watch defaults and overrides the package", function()
       assert.equals(
         "pnpm --filter @ledgerhq/live-common run watch",
