@@ -601,8 +601,23 @@ end
 -- ── public entry point ─────────────────────────────────────────────────────
 
 -- Default monorepo-relative locations (verified against the 2026-04-08 checkout).
-local ENUM_DIR = "libs/ledger-live-common/src/e2e/enum"
+-- The e2e enum tables moved out of libs/ledger-live-common into the extracted
+-- @ledgerhq/live-e2e-shared package; prefer the new location, fall back to the
+-- old one so the resolver still works on pre-refactor checkouts.
+local ENUM_DIRS = { "e2e/shared/src/enum", "libs/ledger-live-common/src/e2e/enum" }
 local SWAP_DIR = "e2e/mobile/specs/swap"
+
+-- First enum dir whose Currency.ts is readable (else the new-path default, whose
+-- upstream read then fails → {}). `_`-exposed for unit tests.
+function M._detect_enum_dir(root)
+  for _, rel in ipairs(ENUM_DIRS) do
+    local dir = root .. "/" .. rel
+    if vim.fn.filereadable(dir .. "/Currency.ts") == 1 then
+      return dir
+    end
+  end
+  return root .. "/" .. ENUM_DIRS[1]
+end
 
 -- Desktop Shape-B (issue #57, milestone 1). Scoped to the two PUREST specs.
 -- Each entry names the spec file (relative to the desktop specs dir) and the
@@ -626,7 +641,7 @@ function M.resolve_swap(root, opts)
   if type(root) ~= "string" or root == "" then
     return {}
   end
-  local enum_dir = opts.enum_dir or (root .. "/" .. ENUM_DIR)
+  local enum_dir = opts.enum_dir or M._detect_enum_dir(root)
   local swap_dir = opts.swap_dir or (root .. "/" .. SWAP_DIR)
 
   local currency_src = read_file(opts.currency_file or (enum_dir .. "/Currency.ts"))
@@ -696,7 +711,7 @@ function M.resolve_desktop(root, opts)
   if type(root) ~= "string" or root == "" then
     return {}
   end
-  local enum_dir = opts.enum_dir or (root .. "/" .. ENUM_DIR)
+  local enum_dir = opts.enum_dir or M._detect_enum_dir(root)
   local spec_dir = opts.spec_dir or (root .. "/" .. DESKTOP_SPEC_DIR)
 
   local currency_src = read_file(opts.currency_file or (enum_dir .. "/Currency.ts"))
@@ -772,7 +787,7 @@ function M.picker_entries(root, platform)
   if type(root) ~= "string" or root == "" then
     return {}
   end
-  local enum_dir = root .. "/" .. ENUM_DIR
+  local enum_dir = M._detect_enum_dir(root)
   local currency = read_file(enum_dir .. "/Currency.ts")
   local account = read_file(enum_dir .. "/Account.ts")
   if not currency or not account then
