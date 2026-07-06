@@ -114,9 +114,9 @@ describe("ledger.tasks.templates", function()
         ).cmd
       )
       -- name + its spec: scope to ONE file AND one test (one app launch); the
-      -- name with spaces stays a single quoted -t token (the quoting fix)
+      -- name is regex-escaped then shell-quoted (single quotes) → matches literally
       assert.equals(
-        'pnpm detox test --configuration ios.sim.debug specs/swap/x.spec.ts -t "Checks if the amount is hidden in the asset drawer"',
+        "pnpm detox test --configuration ios.sim.debug specs/swap/x.spec.ts -t 'Checks if the amount is hidden in the asset drawer'",
         templates.resolve("mobile.detox.test", {
           config = "ios.sim.debug",
           scope = "name",
@@ -126,11 +126,21 @@ describe("ledger.tasks.templates", function()
       )
       -- name without a known spec (free-text grep): just the -t filter
       assert.equals(
-        'pnpm detox test --configuration ios.sim.debug -t "Checks if the amount is hidden in the asset drawer"',
+        "pnpm detox test --configuration ios.sim.debug -t 'Checks if the amount is hidden in the asset drawer'",
         templates.resolve("mobile.detox.test", {
           config = "ios.sim.debug",
           scope = "name",
           name = "Checks if the amount is hidden in the asset drawer",
+        }, ROOT).cmd
+      )
+      -- regex metacharacters are escaped so jest -t matches the title LITERALLY
+      -- (not `[Bitcoin]` as a character class) — the resolver's names need this
+      assert.equals(
+        [[pnpm detox test --configuration ios.sim.debug -t '\[Bitcoin\] Add account']],
+        templates.resolve("mobile.detox.test", {
+          config = "ios.sim.debug",
+          scope = "name",
+          name = "[Bitcoin] Add account",
         }, ROOT).cmd
       )
     end)
@@ -153,8 +163,17 @@ describe("ledger.tasks.templates", function()
         templates.resolve("desktop.pw.run", { scope = "file", spec = "settings.spec.ts" }, ROOT).cmd
       )
       assert.equals(
-        'pnpm e2e:desktop test:playwright --grep "@NanoSP"',
+        "pnpm e2e:desktop test:playwright --grep '@NanoSP'",
         templates.resolve("desktop.pw.run", { scope = "name", name = "@NanoSP" }, ROOT).cmd
+      )
+      -- name + spec: scope Playwright to the one file AND grep the (escaped) title
+      assert.equals(
+        [[pnpm e2e:desktop test:playwright tests/specs/add.account.spec.ts --grep '\[Bitcoin\] Add account']],
+        templates.resolve("desktop.pw.run", {
+          scope = "name",
+          spec = "tests/specs/add.account.spec.ts",
+          name = "[Bitcoin] Add account",
+        }, ROOT).cmd
       )
       assert.equals(
         "PWDEBUG=1 pnpm e2e:desktop test:playwright",

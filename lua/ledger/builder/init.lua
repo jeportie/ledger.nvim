@@ -1102,11 +1102,34 @@ local function resolve_spec(occ, base, specs_dir)
   return hit and hit:gsub("^" .. vim.pesc(base .. "/"), "") or nil
 end
 
+-- Merge the raw rg-scraped title occurrences with resolver entries: drop raw
+-- titles still carrying `${…}` (unrunnable template literals), then add each
+-- resolved concrete name pinned to its spec (is_spec so resolve_spec returns it
+-- directly). Returns the sorted name list + the occ map the picker keys off.
+-- Pure (unit-tested).
+function M._merge_candidates(raw_occ, entries)
+  local occ = {}
+  for title, o in pairs(raw_occ or {}) do
+    if not title:find("${", 1, true) then
+      occ[title] = o
+    end
+  end
+  for _, e in ipairs(entries or {}) do
+    occ[e.name] = { rel = e.spec, is_spec = true }
+  end
+  local names = {}
+  for name in pairs(occ) do
+    names[#names + 1] = name
+  end
+  table.sort(names)
+  return names, occ
+end
+
 -- Pick by test NAME: it()/test() titles in the target's specs. Multiline -U so
 -- desktop Playwright (title on the line after `test(`) is captured too.
 local function pick_test_name()
   local dir, base = specs_root()
-  local names, seen, occ = {}, {}, {}
+  local raw = {}
   -- -H -n give `file:line:title` so a title can be pinned to ONE spec (else detox
   -- relaunches the app per spec file). Titles defined in shared helpers are mapped
   -- to their calling .spec.ts on pick (resolve_spec).
@@ -1121,15 +1144,16 @@ local function pick_test_name()
     end
     local rel = file:gsub("^" .. vim.pesc(base .. "/"), "")
     local is_spec = rel:match("%.spec%.ts$") ~= nil -- jest only runs *.spec.ts
-    if not seen[t] then
-      seen[t] = true
-      names[#names + 1] = t
-      occ[t] = { file = file, line = tonumber(lno), rel = rel, is_spec = is_spec }
-    elseif is_spec and occ[t] and not occ[t].is_spec then
-      occ[t] = { file = file, line = tonumber(lno), rel = rel, is_spec = true } -- prefer a real spec
+    if not raw[t] then
+      raw[t] = { file = file, line = tonumber(lno), rel = rel, is_spec = is_spec }
+    elseif is_spec and not raw[t].is_spec then
+      raw[t] = { file = file, line = tonumber(lno), rel = rel, is_spec = true } -- prefer a real spec
     end
   end)
-  table.sort(names)
+  -- fold in concrete names for parameterized titles the resolver covers (falls
+  -- back to the raw scrape when the monorepo/resolver yields nothing)
+  local entries = require("ledger.builder.testnames").picker_entries(state.root, state.platform)
+  local names, occ = M._merge_candidates(raw, entries)
   names[#names + 1] = "✎ type a name / grep…"
   vim.ui.select(names, { prompt = "Test name (" .. target_label() .. ")" }, function(sel)
     if not sel then

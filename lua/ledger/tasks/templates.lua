@@ -40,6 +40,19 @@ end
 --     launch). NB: jest's `--testPathPattern` flag was removed in jest 30.
 --   * name adds `-t "<name>"`; pairing it with spec means jest only loads that
 --     file (otherwise detox relaunches the app for every spec file and skips).
+-- jest `-t` and Playwright `--grep` take a REGEX, so escape the ERE/JS
+-- metacharacters to match a concrete title literally (e.g. `[Bitcoin] Add
+-- account` → `\[Bitcoin\] Add account`, not a `[Bitcoin]` character class).
+local function regex_escape(s)
+  return (s:gsub("[%.%*%+%?%^%$%{%}%(%)|%[%]\\]", "\\%0"))
+end
+
+-- The name filter, regex-escaped then shell-quoted (vim.fn.shellescape → safe
+-- single-quoting for `sh -c`, handling $, backticks, embedded quotes).
+local function name_filter(name)
+  return vim.fn.shellescape(regex_escape(name))
+end
+
 local function detox_test_cmd(opts)
   local cfg = opts.config or "ios.sim.debug"
   local base = "pnpm detox test --configuration " .. cfg
@@ -48,7 +61,7 @@ local function detox_test_cmd(opts)
     base = base .. " " .. opts.spec
   end
   if scope == "name" and opts.name and opts.name ~= "" then
-    base = base .. ' -t "' .. opts.name .. '"'
+    base = base .. " -t " .. name_filter(opts.name)
   end
   return base
 end
@@ -59,10 +72,12 @@ end
 local function pw_run_cmd(opts)
   local base = "pnpm e2e:desktop test:playwright"
   local scope = opts.scope or "all"
-  if scope == "file" and opts.spec and opts.spec ~= "" then
+  -- a paired spec scopes Playwright to that one file; --grep filters by title
+  if (scope == "file" or scope == "name") and opts.spec and opts.spec ~= "" then
     base = base .. " " .. opts.spec
-  elseif scope == "name" and opts.name and opts.name ~= "" then
-    base = base .. ' --grep "' .. opts.name .. '"'
+  end
+  if scope == "name" and opts.name and opts.name ~= "" then
+    base = base .. " --grep " .. name_filter(opts.name)
   end
   local prefix = ""
   if opts.mock then

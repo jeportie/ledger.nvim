@@ -217,6 +217,68 @@ describe("ledger.builder.testnames", function()
     end)
   end)
 
+  -- ── picker_entries_from_sources: concrete name ↔ owning spec ─────────────
+  describe("picker_entries_from_sources", function()
+    it("mobile: pairs each concrete swap name with its spec", function()
+      local currency = [[
+        static readonly BTC = new Currency("Bitcoin", "BTC", "bitcoin", A, [N.BTC]);
+        static readonly ETH = new Currency("Ethereum", "ETH", "ethereum", A, [N.ETH]);
+      ]]
+      local account = [[
+        static readonly BTC_NATIVE_SEGWIT_1 = new Account(Currency.BTC, "Bitcoin 1", 0, "p", undefined, undefined, "native_segwit");
+        static readonly ETH_1 = new Account(Currency.ETH, "Ethereum 1", 0, "p", undefined, undefined, undefined);
+      ]]
+      local helper = "it(`Swap ${accountToDebit.currency.name} to ${accountToCredit.currency.name}`, async () => {"
+      local entries = tn.picker_entries_from_sources("mobile", {
+        currency = currency,
+        account = account,
+        helper = helper,
+        specs = {
+          {
+            src = "runSwapTest(Account.ETH_1, Account.BTC_NATIVE_SEGWIT_1, [], []);",
+            spec = "specs/swap/ethbtc.spec.ts",
+          },
+          {
+            src = "runSwapTest(Account.BTC_NATIVE_SEGWIT_1, Account.ETH_1, [], []);",
+            spec = "specs/swap/btceth.spec.ts",
+          },
+        },
+      })
+      assert.same({
+        { name = "Swap Ethereum to Bitcoin", spec = "specs/swap/ethbtc.spec.ts" },
+        { name = "Swap Bitcoin to Ethereum", spec = "specs/swap/btceth.spec.ts" },
+      }, entries)
+    end)
+
+    it("desktop: pairs each Shape-B name with its spec", function()
+      local entries = tn.picker_entries_from_sources("desktop", {
+        currency = [[
+          static readonly BTC = new Currency("Bitcoin", "BTC", "bitcoin", A, []);
+          static readonly ETH = new Currency("Ethereum", "ETH", "ethereum", A, []);
+        ]],
+        specs = {
+          {
+            array = "currencies",
+            spec = "tests/specs/add.account.spec.ts",
+            src = [[
+              const currencies = [
+                { currency: Currency.BTC, xrayTicket: "X" },
+                { currency: Currency.ETH, xrayTicket: "Y" },
+              ];
+              for (const currency of currencies) {
+                test(`[${currency.currency.name}] Add account`, () => {});
+              }
+            ]],
+          },
+        },
+      })
+      assert.same({
+        { name = "[Bitcoin] Add account", spec = "tests/specs/add.account.spec.ts" },
+        { name = "[Ethereum] Add account", spec = "tests/specs/add.account.spec.ts" },
+      }, entries)
+    end)
+  end)
+
   -- ══ DESKTOP "Shape-B": array literal → for-loop → parameterized title ═════
   --
   -- All unit tests use tiny INLINE fixtures (CI has no monorepo). A single
