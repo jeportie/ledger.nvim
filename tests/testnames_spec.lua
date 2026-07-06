@@ -8,6 +8,29 @@
 local tn = require("ledger.builder.testnames")
 
 describe("ledger.builder.testnames", function()
+  -- ── enum dir detection (moved to e2e/shared after the refactor) ─────────
+  describe("_detect_enum_dir", function()
+    local function mk(rel)
+      local root = vim.fn.tempname()
+      local dir = root .. "/" .. rel
+      vim.fn.mkdir(dir, "p")
+      vim.fn.writefile({ "// stub" }, dir .. "/Currency.ts")
+      return root
+    end
+    it("prefers the new e2e/shared/src/enum location", function()
+      local root = mk("e2e/shared/src/enum")
+      assert.equals(root .. "/e2e/shared/src/enum", tn._detect_enum_dir(root))
+    end)
+    it("falls back to the old libs/ledger-live-common path", function()
+      local root = mk("libs/ledger-live-common/src/e2e/enum")
+      assert.equals(root .. "/libs/ledger-live-common/src/e2e/enum", tn._detect_enum_dir(root))
+    end)
+    it("defaults to the new path when neither exists", function()
+      local root = vim.fn.tempname()
+      assert.equals(root .. "/e2e/shared/src/enum", tn._detect_enum_dir(root))
+    end)
+  end)
+
   -- ── enum evaluator: currencies ──────────────────────────────────────────
   describe("parse_currencies", function()
     it("captures name + ticker from a single-line declaration", function()

@@ -441,10 +441,11 @@ describe("ledger.builder.ui.panes", function()
         70
       )
     )
-    assert.is_truthy(s:find("4/4", 1, true)) -- 4 required steps; clean excluded (not 5/5)
+    assert.is_truthy(s:find("5/5", 1, true)) -- 5 required steps; clean excluded (not 6/6)
     assert.is_truthy(s:find("󰃢 clean", 1, true)) -- clean leads with the broom, not a number
     assert.is_truthy(s:find("1 install deps", 1, true)) -- real steps renumber from 1
     assert.is_truthy(s:find("2 build:lld:deps", 1, true))
+    assert.is_truthy(s:find("4 build e2e-shared", 1, true)) -- the e2e/shared staleness step
   end)
 
   it("a blank line separates the build steps from the Run-tests row", function()
