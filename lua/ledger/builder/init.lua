@@ -138,20 +138,17 @@ local function proc_idx(rows, row, col)
 end
 
 -- Drop focus from a top column into the bottom History list. History rows only
--- render in the Stats view, so remember the current view and switch to Stats
--- when needed; the caller rebuilds (layout change) when this returns true. Stays
--- put (returns false, no side change) when there is no history to land on.
+-- render in the Stats view, so only enter when Stats is ALREADY on screen (never
+-- auto-switch the bottom row from under the user). Stays put (returns false, no
+-- side change) when Stats is hidden or there is no history to land on. Never
+-- toggles `bottom`, so it never needs a rebuild → always returns false.
 local function enter_history()
-  if view_len("history") == 0 then
+  if state.bottom ~= "stats" or view_len("history") == 0 then
     return false
   end
   state.prev_side = state.side
   state.side = "bottom"
   state.focus_idx = 1
-  if state.bottom ~= "stats" then
-    state.bottom = "stats"
-    return true -- rows now visible; caller must rebuild
-  end
   return false
 end
 
@@ -599,7 +596,7 @@ end
 -- Rebuild layout + buffer when section line counts change (tabs/subtab/pane/
 -- help/platform). volt locks heights at gen_data time.
 local function rebuild()
-  if not state or not vim.api.nvim_buf_is_valid(state.buf) then
+  if not state or not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
     return
   end
   local volt = require("volt")
@@ -914,8 +911,15 @@ function M.proc_popup(p)
 end
 
 -- < / > swap the bottom row between Logs and Stats (Pipeline + Processes stay).
+-- History rows only render in Stats, so if focus was in the bottom (History) and
+-- we just switched away from Stats, kick it back to the Pipeline column so focus
+-- never lingers on now-hidden rows.
 local function toggle_bottom()
   state.bottom = state.bottom == "stats" and "logs" or "stats"
+  if state.bottom ~= "stats" and state.side == "bottom" then
+    state.side = "left"
+    state.focus_idx = 1
+  end
   rebuild()
 end
 
@@ -1286,7 +1290,7 @@ end
 -- row shows its current effective value; picking one flips/cycles it, persists
 -- via settings.set, re-applies what a live rebuild() can (spinner cadence reads
 -- cfg() each tick), then REOPENS the menu so several toggles feel like a panel.
--- Window options (border/transparent/backdrop/loader) are read when the float
+-- Window options (border/transparent/backdrop) are read when the float
 -- is created, so toggling one re-mounts the Builder to apply it immediately. The
 -- two Allure rows delete the active platform's results/report dir (confirm-gated).
 local function settings_menu()
@@ -1295,7 +1299,7 @@ local function settings_menu()
   end
   local c = cfg()
   -- options read only at window-creation time → a re-mount applies them live.
-  local WINDOW_OPTS = { border = true, transparent = true, backdrop = true, loader = true }
+  local WINDOW_OPTS = { border = true, transparent = true, backdrop = true }
   local function on(v)
     return v and "on" or "off"
   end
@@ -1306,7 +1310,6 @@ local function settings_menu()
     { id = "border", label = "Border: " .. on(c.border) },
     { id = "transparent", label = "Transparent: " .. on(c.transparent) },
     { id = "backdrop", label = "Backdrop: " .. on(c.backdrop) },
-    { id = "loader", label = "Loader: " .. on(c.loader) },
     { id = "animation", label = "Animation: " .. (c.animation or "max") },
     { id = "substeps_default", label = "Substeps default: " .. on(c.substeps_default) },
     { id = "allure_results", label = "Delete Allure results (" .. target .. ")" },
@@ -1349,7 +1352,7 @@ local function settings_menu()
         rebuild()
         settings_menu()
       elseif WINDOW_OPTS[id] then
-        -- border/transparent/backdrop/loader are read when the float is created,
+        -- border/transparent/backdrop are read when the float is created,
         -- so re-mount to apply them now. The old window's WinClosed schedules a
         -- (harmless — state.win is already nil) hide; schedule the re-show AFTER
         -- it so it can't close the fresh window, then reopen the panel on top.
@@ -1665,10 +1668,12 @@ local function set_keymaps()
   end
   -- Navigation: Pipeline (left column) | Processes (right card grid) on top,
   -- History list below. nav_transition (module scope) does the pure focus math;
-  -- when it enters/leaves the bottom it flips the Stats view, so rebuild then.
+  -- it returns true only when the bottom view actually changed (a relayout is
+  -- then needed). Entering History no longer toggles the view, so that path just
+  -- moves focus and redraws the body.
   local function nav(dir)
     if nav_transition(dir) then
-      rebuild() -- bottom view changed (History rows shown) → relayout
+      rebuild() -- bottom view changed → relayout
     end
     sync_focus()
     redraw("body")
@@ -1820,7 +1825,7 @@ end
 local function mount()
   local volt = require("volt")
   local builder_cfg = cfg()
-  local ns = require("ledger.builder.ui.hl").setup()
+  local ns = require("ledger.builder.ui.hl").setup(builder_cfg)
   local border = builder_cfg.border and "single" or "none"
 
   compute_dims()
@@ -1847,11 +1852,10 @@ local function mount()
     border = border, -- the border carries no title (see config.builder.border)
   })
 
-  -- opaque, theme-tracking panel via the window-local highlight namespace
+  -- opaque, theme-tracking panel via the window-local highlight namespace.
+  -- Transparency comes from the NONE bg the hl ns sets (config.builder.transparent),
+  -- not winblend — so there's no winblend to set here.
   pcall(vim.api.nvim_win_set_hl_ns, state.win, ns)
-  if builder_cfg.transparent then
-    vim.wo[state.win].winblend = 0
-  end
 
   volt.run(state.buf, { h = h, w = state.W })
 
@@ -2046,6 +2050,7 @@ M._test = {
     nav_transition(dir)
     sync_focus()
   end,
+  toggle_bottom = toggle_bottom,
   activate = activate,
 }
 

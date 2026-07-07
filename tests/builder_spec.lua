@@ -441,11 +441,10 @@ describe("ledger.builder.ui.panes", function()
         70
       )
     )
-    assert.is_truthy(s:find("5/5", 1, true)) -- 5 required steps; clean excluded (not 6/6)
+    assert.is_truthy(s:find("4/4", 1, true)) -- 4 required steps; clean excluded (not 5/5)
     assert.is_truthy(s:find("󰃢 clean", 1, true)) -- clean leads with the broom, not a number
     assert.is_truthy(s:find("1 install deps", 1, true)) -- real steps renumber from 1
     assert.is_truthy(s:find("2 build:lld:deps", 1, true))
-    assert.is_truthy(s:find("4 build e2e-shared", 1, true)) -- the e2e/shared staleness step
   end)
 
   it("a blank line separates the build steps from the Run-tests row", function()
@@ -892,6 +891,35 @@ describe("ledger.builder.ui.hl + loader", function()
     assert.is_table(vim.api.nvim_get_hl(ns, { name = "Normal" }))
   end)
 
+  -- Fix: apply_float honours the EFFECTIVE config passed by the caller (settings
+  -- overlay), not just the raw config — so a toggled border is coloured visibly.
+  it("border=true colours FloatBorder in contrast to the panel bg + reacts to the opt", function()
+    local hl = require("ledger.builder.ui.hl")
+    local get = vim.api.nvim_get_hl
+    -- with a border, the border fg must be distinct from the window bg (visible)
+    local ns_on = vim.api.nvim_create_namespace("ledger_test_hl_border_on")
+    hl.apply_float(ns_on, { border = true, transparent = false })
+    assert.are_not.equals(get(ns_on, { name = "FloatBorder" }).fg, get(ns_on, { name = "Normal" }).bg)
+    -- and the border colour actually tracks the passed opt (proves the overlay is
+    -- wired, not read from a bypassed global config): on vs off differ.
+    local ns_off = vim.api.nvim_create_namespace("ledger_test_hl_border_off")
+    hl.apply_float(ns_off, { border = false, transparent = false })
+    assert.are_not.equals(get(ns_on, { name = "FloatBorder" }).fg, get(ns_off, { name = "FloatBorder" }).fg)
+  end)
+
+  it("transparent=true leaves Normal + FloatBorder with no bg (NONE)", function()
+    local hl = require("ledger.builder.ui.hl")
+    local ns = vim.api.nvim_create_namespace("ledger_test_hl_transp")
+    hl.apply_float(ns, { transparent = true })
+    -- a NONE bg is reported as an absent bg key by nvim_get_hl
+    assert.is_nil(vim.api.nvim_get_hl(ns, { name = "Normal" }).bg)
+    assert.is_nil(vim.api.nvim_get_hl(ns, { name = "FloatBorder" }).bg)
+    -- a non-transparent panel still has an opaque bg
+    local ns2 = vim.api.nvim_create_namespace("ledger_test_hl_opaque")
+    hl.apply_float(ns2, { transparent = false })
+    assert.is_truthy(vim.api.nvim_get_hl(ns2, { name = "Normal" }).bg)
+  end)
+
   it("pulse cycles through the level groups", function()
     local hl = require("ledger.builder.ui.hl")
     assert.equals("LedgerPulse0", hl.pulse(0))
@@ -1053,14 +1081,25 @@ describe("ledger.builder controller — focus & navigation", function()
     assert.equals(#builder._test.history_recent(builder._test.get_state()), builder._test.view_len("history"))
   end)
 
-  it("down from the last pipeline row drops into History", function()
+  it("down from the last pipeline row drops into History when Stats is shown", function()
     seed(2)
-    builder._test.set_state(mkstate({ side = "left", focus_idx = 4 })) -- last of 4 items
+    builder._test.set_state(mkstate({ side = "left", focus_idx = 4, bottom = "stats" })) -- last of 4 items
     builder._test.nav("down")
     local st = builder._test.get_state()
     assert.equals("bottom", st.side)
     assert.equals(1, st.focus_idx)
-    assert.equals("stats", st.bottom) -- rows only render in Stats → auto-switched
+    assert.equals("stats", st.bottom) -- bottom is left as-is (never toggled)
+  end)
+
+  it("down from the last pipeline row stays put when Stats is NOT shown", function()
+    seed(2)
+    -- History rows only render in Stats; with the Logs bottom on screen, down must
+    -- NOT enter History and must NOT toggle the bottom row.
+    builder._test.set_state(mkstate({ side = "left", focus_idx = 4, bottom = "logs" }))
+    builder._test.nav("down")
+    local st = builder._test.get_state()
+    assert.equals("left", st.side) -- stayed on the pipeline column
+    assert.equals("logs", st.bottom) -- bottom untouched
   end)
 
   it("down within the pipeline just advances (no early drop)", function()
@@ -1084,7 +1123,8 @@ describe("ledger.builder controller — focus & navigation", function()
 
   it("does not enter History when there is none to land on", function()
     history._entries = {} -- empty
-    builder._test.set_state(mkstate({ side = "left", focus_idx = 4 }))
+    -- Stats is shown, so the only reason to stay put is the empty history list.
+    builder._test.set_state(mkstate({ side = "left", focus_idx = 4, bottom = "stats" }))
     builder._test.nav("down")
     local st = builder._test.get_state()
     assert.equals("left", st.side) -- stayed put
@@ -1093,7 +1133,7 @@ describe("ledger.builder controller — focus & navigation", function()
 
   it("in History: k at the top returns to the prior side; j/k clamp in range", function()
     seed(3)
-    builder._test.set_state(mkstate({ side = "left", focus_idx = 4 }))
+    builder._test.set_state(mkstate({ side = "left", focus_idx = 4, bottom = "stats" }))
     builder._test.nav("down") -- enter History from Pipeline (prev_side = "left")
     local st = builder._test.get_state()
     assert.equals("bottom", st.side)
@@ -1113,6 +1153,27 @@ describe("ledger.builder controller — focus & navigation", function()
     -- k at the top escapes back to the remembered side
     builder._test.nav("up")
     assert.equals("left", st.side)
+  end)
+
+  it("toggling the bottom away from Stats kicks focus off History back to Pipeline", function()
+    seed(3)
+    -- focus lives in the bottom History list (Stats shown)…
+    builder._test.set_state(mkstate({ side = "bottom", focus_idx = 2, bottom = "stats" }))
+    builder._test.toggle_bottom() -- …flip Stats → Logs
+    local st = builder._test.get_state()
+    assert.equals("logs", st.bottom)
+    assert.equals("left", st.side) -- focus can't linger on hidden History rows
+    assert.equals(1, st.focus_idx)
+  end)
+
+  it("toggling the bottom while focus is on the Pipeline leaves the side alone", function()
+    seed(3)
+    builder._test.set_state(mkstate({ side = "left", focus_idx = 2, bottom = "logs" }))
+    builder._test.toggle_bottom() -- Logs → Stats
+    local st = builder._test.get_state()
+    assert.equals("stats", st.bottom)
+    assert.equals("left", st.side) -- untouched (focus was never in the bottom)
+    assert.equals(2, st.focus_idx)
   end)
 
   it("activate in History loads the focused run's log, then focuses the top", function()

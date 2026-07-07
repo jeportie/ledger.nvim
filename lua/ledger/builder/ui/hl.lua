@@ -33,14 +33,16 @@ local function panel_bg()
 end
 
 -- Define all builder groups inside `ns`. `opts.border` / `opts.transparent`
--- shape the panel bg (matches wrapped.nvim).
-function M.apply_float(ns)
+-- shape the panel bg (matches wrapped.nvim). `opts` is the EFFECTIVE builder
+-- config (settings overlay applied) passed by the caller; falls back to the raw
+-- config only when called without it (e.g. the compat entry point / tests).
+function M.apply_float(ns, opts)
   if not get_hl("ExBlue").fg then
     require("volt.highlights")
   end
-  local cfg = require("ledger.config").get().builder or {}
-  local border = cfg.border
-  local transparent = cfg.transparent
+  local eff = opts or (require("ledger.config").get().builder or {})
+  local border = eff.border
+  local transparent = eff.transparent
 
   local bg = panel_bg()
   local has_bg = bg ~= nil and not transparent
@@ -116,10 +118,12 @@ function M.pulse(tick)
   return "LedgerPulse" .. seq[(math.floor(tick / 2) % #seq) + 1]
 end
 
--- Compatibility entry point: ensure ns exists and groups are defined.
-function M.setup()
+-- Compatibility entry point: ensure ns exists and groups are defined. `opts` is
+-- the effective builder config (settings overlay applied), forwarded so a
+-- toggled border/transparent is coloured correctly.
+function M.setup(opts)
   M.ns = M.ns or api.nvim_create_namespace("ledger_builder_hl")
-  M.apply_float(M.ns)
+  M.apply_float(M.ns, opts)
   return M.ns
 end
 

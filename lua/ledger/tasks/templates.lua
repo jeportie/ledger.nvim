@@ -442,16 +442,6 @@ M.templates = {
     end,
   },
   {
-    id = "shared.e2e_shared.build",
-    label = "Nx · build @ledgerhq/live-e2e-shared",
-    platform = "shared",
-    kind = "build",
-    cwd = "repo",
-    -- E2E specs load the BUILT e2e/shared/lib (never src), so a src edit needs a
-    -- rebuild before tests run. Cached — a no-op when src is unchanged.
-    cmd = "pnpm nx build @ledgerhq/live-e2e-shared",
-  },
-  {
     id = "shared.adb.reverse",
     label = "Android · adb reverse (8081 + 8099)",
     platform = "mobile",

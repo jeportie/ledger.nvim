@@ -42,6 +42,7 @@ M.desktop = {
     match = "pnpm%S* i",
   },
   {
+    -- build:lld:deps also builds @ledgerhq/live-e2e-shared (part of the deps graph).
     id = "libs",
     label = "build:lld:deps",
     template = "desktop.build.deps",
@@ -54,15 +55,6 @@ M.desktop = {
     template = "desktop.build.cli",
     match = "build:cli",
     nx_project = "@ledgerhq/live-cli",
-  },
-  {
-    id = "e2e_shared",
-    label = "build e2e-shared",
-    template = "shared.e2e_shared.build",
-    artifact = "e2e/shared/lib/index.js",
-    sources = { "e2e/shared/src" },
-    match = "live%-e2e%-shared",
-    nx_project = "@ledgerhq/live-e2e-shared",
   },
   {
     id = "build",
@@ -91,6 +83,7 @@ M.ios = {
     match = "pnpm%S* i",
   },
   {
+    -- build:llm:deps also builds @ledgerhq/live-e2e-shared (part of the deps graph).
     id = "libs",
     label = "build:llm:deps",
     template = "mobile.build.deps",
@@ -110,15 +103,6 @@ M.ios = {
     template = "mobile.pod",
     artifact = "apps/ledger-live-mobile/ios/Podfile.lock",
     match = "mobile pod",
-  },
-  {
-    id = "e2e_shared",
-    label = "build e2e-shared",
-    template = "shared.e2e_shared.build",
-    artifact = "e2e/shared/lib/index.js",
-    sources = { "e2e/shared/src" },
-    match = "live%-e2e%-shared",
-    nx_project = "@ledgerhq/live-e2e-shared",
   },
   {
     id = "build",
@@ -147,6 +131,7 @@ M.android = {
     match = "pnpm%S* i",
   },
   {
+    -- build:llm:deps also builds @ledgerhq/live-e2e-shared (part of the deps graph).
     id = "libs",
     label = "build:llm:deps",
     template = "mobile.build.deps",
@@ -159,15 +144,6 @@ M.android = {
     template = "mobile.build.cli",
     match = "build:cli",
     nx_project = "@ledgerhq/live-cli",
-  },
-  {
-    id = "e2e_shared",
-    label = "build e2e-shared",
-    template = "shared.e2e_shared.build",
-    artifact = "e2e/shared/lib/index.js",
-    sources = { "e2e/shared/src" },
-    match = "live%-e2e%-shared",
-    nx_project = "@ledgerhq/live-e2e-shared",
   },
   {
     id = "build",
