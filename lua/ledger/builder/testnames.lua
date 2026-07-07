@@ -651,10 +651,16 @@ end
 -- ── public entry point ─────────────────────────────────────────────────────
 
 -- Default monorepo-relative locations (verified against the 2026-04-08 checkout).
--- The e2e enum tables moved out of libs/ledger-live-common into the extracted
--- @ledgerhq/live-e2e-shared package; prefer the new location, fall back to the
--- old one so the resolver still works on pre-refactor checkouts.
-local ENUM_DIRS = { "e2e/shared/src/enum", "libs/ledger-live-common/src/e2e/enum" }
+-- The e2e enum tables have moved twice: libs/ledger-live-common/src/e2e →
+-- e2e/shared/src/enum → libs/live-e2e-shared/src/enum (LedgerHQ/ledger-live
+-- #19312 "move e2e/shared to libs"). Try newest-first, falling back so the
+-- resolver works across checkout vintages. The newest entry is inert until that
+-- dir exists (first-readable-wins), so this is safe to land before #19312 merges.
+local ENUM_DIRS = {
+  "libs/live-e2e-shared/src/enum",
+  "e2e/shared/src/enum",
+  "libs/ledger-live-common/src/e2e/enum",
+}
 local SWAP_DIR = "e2e/mobile/specs/swap"
 
 -- First enum dir whose Currency.ts is readable (else the new-path default, whose
