@@ -101,7 +101,12 @@ M.ios = {
     id = "pod",
     label = "pod install",
     template = "mobile.pod",
-    artifact = "apps/ledger-live-mobile/ios/Podfile.lock",
+    -- Pods are in sync only when the installed Pods/Manifest.lock still matches
+    -- Podfile.lock (CocoaPods' own "sandbox not in sync" check). A native-dep bump
+    -- (e.g. MMKV) changes Podfile.lock → this flips to needs_update → gates the
+    -- detox build. Manifest.lock missing (never installed) → missing.
+    artifact = "apps/ledger-live-mobile/ios/Pods/Manifest.lock",
+    synced_with = "apps/ledger-live-mobile/ios/Podfile.lock",
     match = "mobile pod",
   },
   {
@@ -216,6 +221,7 @@ end
 --   detox_binary(config) -> rel path | nil,
 --   artifact_exists(abs) -> bool,
 --   is_stale(abs, abs_sources) -> bool,
+--   files_equal(abs_a, abs_b) -> bool,  -- content match (synced_with steps)
 --   proc_alive(name) -> bool,
 --   last_result(step) -> { code, … } | nil,  -- last run: per-repo store, or the
 --                                             -- Nx cache for nx_project steps
@@ -233,6 +239,13 @@ function M.status(step, ctx)
     local path = M.resolve_artifact(step, ctx)
     if not path or not ctx.artifact_exists(path) then
       return "missing"
+    end
+    -- `synced_with`: the artifact is an install manifest that must still MATCH a
+    -- source lockfile (CocoaPods' Pods/Manifest.lock vs Podfile.lock). A content
+    -- mismatch = the installed sandbox is out of sync → rebuild. Content compare
+    -- (not mtime) so a branch switch that only touches mtimes doesn't false-flag.
+    if step.synced_with and ctx.files_equal and not ctx.files_equal(path, ctx.root .. "/" .. step.synced_with) then
+      return "needs_update"
     end
     if step.sources and #step.sources > 0 and ctx.is_stale(path, resolve_sources(step, ctx)) then
       return "needs_update"

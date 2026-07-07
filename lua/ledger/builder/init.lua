@@ -277,6 +277,14 @@ local function refresh_statuses()
     is_stale = function(path, sources)
       return staleness.is_stale(path, sources)
     end,
+    files_equal = function(a, b)
+      local oka, la = pcall(vim.fn.readfile, a)
+      local okb, lb = pcall(vim.fn.readfile, b)
+      if not (oka and okb) then
+        return false -- either unreadable → treat as out of sync
+      end
+      return table.concat(la, "\n") == table.concat(lb, "\n")
+    end,
     proc_alive = function(name)
       return alive[name] or false
     end,
