@@ -374,60 +374,12 @@ function M.parse_object_array(src, array_name)
   return array_name or true, elements
 end
 
--- Parse the `for (const <binding> of NAME) { … }` header that iterates an array,
--- plus the FIRST parameterized title inside it. Returns
---   { array = "NAME", binding = { kind = "destructure"|"ident",
---                                 fields = { "provider", … } | var = "currency" },
---     template = "Swap - %s flow", accessors = { {var=…, path={…}} } }
--- where `template` has each understood `${…}` replaced by `%s` and `accessors`
--- lists, per slot, the split accessor (var = head identifier, path = the
--- remaining dotted segments). Returns nil if no such loop/title is found or the
--- title contains an interpolation we can't statically resolve.
---
--- Both `test.describe(\`…\`)` and `test(\`…\`)` titles are accepted (desktop uses
--- describe for the swap flow and test for add-account). Direct-literal titles
--- (`${Class.SYM.leaf}`) are also allowed inside the loop and are resolved without
--- the binding (see resolve_shape_b).
-function M.parse_loop_title(src, array_name)
-  if type(src) ~= "string" then
-    return nil
-  end
-  -- Loop header: `for (const <binding> of <NAME>)`. Binding is either
-  -- `{ a, b, c }` or a bare identifier.
-  local binding_src, arr
-  for b, a in src:gmatch("for%s*%(%s*const%s+(.-)%s+of%s+([%w_]+)%s*%)") do
-    if not array_name or a == array_name then
-      binding_src, arr = b, a
-      break
-    end
-  end
-  if not binding_src then
-    return nil
-  end
-
-  local binding
-  local destructured = binding_src:match("^%s*{%s*(.-)%s*}%s*$")
-  if destructured then
-    local fields = {}
-    for f in destructured:gmatch("[%w_]+") do
-      fields[#fields + 1] = f
-    end
-    binding = { kind = "destructure", fields = fields }
-  else
-    local ident = binding_src:match("^%s*([%w_]+)%s*$")
-    if not ident then
-      return nil
-    end
-    binding = { kind = "ident", var = ident }
-  end
-
-  -- First title after the loop header: test.describe(`…`) or test(`…`).
-  local rest = src:sub((src:find("for%s*%(%s*const")) or 1)
-  local raw = rest:match("test%.describe%(%s*`([^`]*)`") or rest:match("test%(%s*`([^`]*)`")
-  if not raw then
-    return nil
-  end
-
+-- Split ONE parameterized title into `{ template, accessors }`, or nil if any
+-- interpolation isn't a resolvable `head.path` chain (a ternary, a bare ident,
+-- etc.). `template` has each `${…}` replaced by `%s`; `accessors` lists, per
+-- slot, the split accessor (head = first identifier, path = the remaining dotted
+-- segments). Shared by every title form so the resolver treats them uniformly.
+local function split_title(raw)
   local accessors = {}
   local ok = true
   local template = raw:gsub("%${([^}]*)}", function(expr)
@@ -451,11 +403,104 @@ function M.parse_loop_title(src, array_name)
     return nil
   end
   template = template:gsub("%%", "%%%%"):gsub("%z", "%%s")
+  return { template = template, accessors = accessors }
+end
+
+-- Parse the `for (const <binding> of NAME) { … }` header that iterates an array,
+-- plus EVERY parameterized title inside its body. Returns
+--   { array = "NAME", binding = { kind = "destructure"|"ident",
+--                                 fields = { "provider", … } | var = "currency" },
+--     titles = { { template = "Swap - %s flow", accessors = { {head=,path=} } }, … } }
+-- with one `titles` entry per parameterized `test.describe(\`…\`)`/`test(\`…\`)`
+-- template found in this loop's body, in source order. Returns nil if no such
+-- loop is found or the body has no resolvable parameterized title.
+--
+-- The body is scoped from THIS loop's header to the next `for (const …` (or end
+-- of source), so a spec with several loops (e.g. earn's cold-start / active /
+-- provider loops) attributes each title to the right array. Both title forms are
+-- captured because a loop may wrap its parameterized `test.describe` around an
+-- equally parameterized inner `test` whose title DIFFERS (earn) — CI records the
+-- `test()` leaf, so both must be emitted. A title with no `${…}` (a plain-string
+-- describe/test) is skipped; a title whose interpolation we can't statically
+-- resolve is skipped too (never a half-resolved name). Direct-literal titles
+-- (`${Class.SYM.leaf}`) outside any loop are handled in resolve_shape_b.
+function M.parse_loop_title(src, array_name)
+  if type(src) ~= "string" then
+    return nil
+  end
+  -- Loop header: `for (const <binding> of <NAME>)`. Binding is either
+  -- `{ a, b, c }` or a bare identifier. Track the byte offset so the body can be
+  -- sliced from THIS loop rather than the first `for` in the file.
+  local binding_src, arr, header_end
+  local pos = 1
+  while true do
+    local s, e, b, a = src:find("for%s*%(%s*const%s+(.-)%s+of%s+([%w_]+)%s*%)", pos)
+    if not s then
+      break
+    end
+    if not array_name or a == array_name then
+      binding_src, arr, header_end = b, a, e
+      break
+    end
+    pos = e + 1
+  end
+  if not binding_src then
+    return nil
+  end
+
+  local binding
+  local destructured = binding_src:match("^%s*{%s*(.-)%s*}%s*$")
+  if destructured then
+    local fields = {}
+    for f in destructured:gmatch("[%w_]+") do
+      fields[#fields + 1] = f
+    end
+    binding = { kind = "destructure", fields = fields }
+  else
+    local ident = binding_src:match("^%s*([%w_]+)%s*$")
+    if not ident then
+      return nil
+    end
+    binding = { kind = "ident", var = ident }
+  end
+
+  -- Scope the body to this loop: from just past its header up to the next
+  -- `for (const …` (or end of source).
+  local next_for = src:find("for%s*%(%s*const", header_end + 1)
+  local body = src:sub(header_end + 1, next_for and next_for - 1 or #src)
+
+  -- Collect every parameterized title in the body, in source order. Both
+  -- `test.describe(\`…\`)` and `test(\`…\`)` forms; `test%(` cannot match inside
+  -- `test.describe(` (there `test` is followed by `.`, not `(`), so the two are
+  -- disjoint at the call site. A title is kept only if it interpolates something
+  -- (has `${`) and split_title resolves every interpolation.
+  local titles = {}
+  local matches = {}
+  for pos_, raw in body:gmatch("()test%.describe%(%s*`([^`]*)`") do
+    matches[#matches + 1] = { at = pos_, raw = raw }
+  end
+  for pos_, raw in body:gmatch("()test%(%s*`([^`]*)`") do
+    matches[#matches + 1] = { at = pos_, raw = raw }
+  end
+  table.sort(matches, function(x, y)
+    return x.at < y.at
+  end)
+  for _, m in ipairs(matches) do
+    if m.raw:find("%${") then
+      local title = split_title(m.raw)
+      if title then
+        titles[#titles + 1] = title
+      end
+    end
+  end
+  if #titles == 0 then
+    return nil
+  end
+
   return {
     array = arr,
     binding = binding,
-    template = template,
-    accessors = accessors,
+    titles = titles,
   }
 end
 
@@ -501,6 +546,19 @@ local function resolve_accessor(enums, binding, element, acc)
   return resolve_enum_leaf(enums, ref.class, ref.sym, leaf)
 end
 
+-- Emit ONE concrete name into `acc`, de-duplicated on `seen`. Appends to
+-- `acc.names` (and `acc.entries` with its owning spec, when the accumulator
+-- tracks them). Shared by the loop-driven and direct-literal branches.
+local function emit(acc, name, spec)
+  if not acc.seen[name] then
+    acc.seen[name] = true
+    acc.names[#acc.names + 1] = name
+    if acc.entries then
+      acc.entries[#acc.entries + 1] = { name = name, spec = spec }
+    end
+  end
+end
+
 -- Render every concrete title for a Shape-B (array + loop + template) unit.
 -- Appends into `acc` (a { seen=, names= } accumulator) so a caller can fold
 -- several specs together. Also resolves any direct-literal titles found in the
@@ -512,26 +570,25 @@ local function resolve_shape_b(enums, src, array_name, acc, spec)
   local _, elements = M.parse_object_array(src, array_name)
   local loop = M.parse_loop_title(src, array_name)
 
-  -- 1) Loop-driven titles: one per array element.
+  -- 1) Loop-driven titles: for EACH array element, resolve EVERY title in the
+  -- loop body. A loop may parameterize both its `test.describe` and a distinct
+  -- inner `test` (earn), so both names are emitted per element; a single-title
+  -- loop (swap/add.account) yields one name each, and an identical describe+test
+  -- pair (were one to exist) collapses via the shared dedup.
   if loop and elements then
     for _, element in ipairs(elements) do
-      local values, complete = {}, true
-      for _, a in ipairs(loop.accessors) do
-        local v = resolve_accessor(enums, loop.binding, element, a)
-        if not v then
-          complete = false
-          break
-        end
-        values[#values + 1] = v
-      end
-      if complete then
-        local name = string.format(loop.template, unpack(values))
-        if not acc.seen[name] then
-          acc.seen[name] = true
-          acc.names[#acc.names + 1] = name
-          if acc.entries then
-            acc.entries[#acc.entries + 1] = { name = name, spec = spec }
+      for _, title in ipairs(loop.titles) do
+        local values, complete = {}, true
+        for _, a in ipairs(title.accessors) do
+          local v = resolve_accessor(enums, loop.binding, element, a)
+          if not v then
+            complete = false
+            break
           end
+          values[#values + 1] = v
+        end
+        if complete then
+          emit(acc, string.format(title.template, unpack(values)), spec)
         end
       end
     end
@@ -566,14 +623,7 @@ local function resolve_shape_b(enums, src, array_name, acc, spec)
       end)
       if any and all_direct then
         template = template:gsub("%%", "%%%%"):gsub("%z", "%%s")
-        local name = string.format(template, unpack(values))
-        if not acc.seen[name] then
-          acc.seen[name] = true
-          acc.names[#acc.names + 1] = name
-          if acc.entries then
-            acc.entries[#acc.entries + 1] = { name = name, spec = spec }
-          end
-        end
+        emit(acc, string.format(template, unpack(values)), spec)
       end
     end
   end
@@ -619,15 +669,23 @@ function M._detect_enum_dir(root)
   return root .. "/" .. ENUM_DIRS[1]
 end
 
--- Desktop Shape-B (issue #57, milestone 1). Scoped to the two PUREST specs.
--- Each entry names the spec file (relative to the desktop specs dir) and the
--- array variable the resolver's loop iterates. Kept explicit rather than
--- globbing so M1's output is exactly the validated golden set; broadening to
--- more specs is a follow-up.
+-- Desktop Shape-B (issues #57 + #58). Scoped to explicitly-vetted (spec, array)
+-- pairs — each entry names the spec file (relative to the desktop specs dir) and
+-- the array variable the resolver's loop iterates. Kept explicit rather than
+-- globbing so the output is exactly the validated golden set; broadening to more
+-- specs is a follow-up.
+--
+-- earn.v2.spec.ts contributes three arrays: each of its loops wraps a
+-- parameterized `test.describe` around a DISTINCT parameterized inner `test`, so
+-- the multi-title parse_loop_title emits both the describe title and the `test()`
+-- leaf CI records (accessors `.currency.ticker` and `provider.name`).
 local DESKTOP_SPEC_DIR = "e2e/desktop/tests/specs"
 local DESKTOP_SHAPE_B = {
   { spec = "provider.swap.spec.ts", array = "providerFlowTests" },
   { spec = "add.account.spec.ts", array = "currencies" },
+  { spec = "earn.v2.spec.ts", array = "coldStartCurrencies" },
+  { spec = "earn.v2.spec.ts", array = "activePositionCurrencies" },
+  { spec = "earn.v2.spec.ts", array = "ethProviders" },
 }
 
 -- Resolve every Shape-A swap test name from a monorepo checkout at `root`.

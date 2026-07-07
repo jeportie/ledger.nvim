@@ -385,8 +385,10 @@ describe("ledger.builder.testnames", function()
       assert.equals("providerFlowTests", loop.array)
       assert.equals("destructure", loop.binding.kind)
       assert.same({ "fromAccount", "toAccount", "provider" }, loop.binding.fields)
-      assert.equals("Swap - %s flow", loop.template)
-      assert.same({ { head = "provider", path = { "uiName" } } }, loop.accessors)
+      -- Single parameterized title in this loop → one entry.
+      assert.equals(1, #loop.titles)
+      assert.equals("Swap - %s flow", loop.titles[1].template)
+      assert.same({ { head = "provider", path = { "uiName" } } }, loop.titles[1].accessors)
     end)
 
     it("parses a PLAIN-IDENT loop + test() title (add account)", function()
@@ -400,8 +402,55 @@ describe("ledger.builder.testnames", function()
       )
       assert.equals("ident", loop.binding.kind)
       assert.equals("currency", loop.binding.var)
-      assert.equals("[%s] Add account", loop.template)
-      assert.same({ { head = "currency", path = { "currency", "name" } } }, loop.accessors)
+      assert.equals(1, #loop.titles)
+      assert.equals("[%s] Add account", loop.titles[1].template)
+      assert.same({ { head = "currency", path = { "currency", "name" } } }, loop.titles[1].accessors)
+    end)
+
+    it("captures BOTH the describe + inner test titles in a loop (earn shape)", function()
+      -- earn's loops wrap a parameterized `test.describe` around a DISTINCT
+      -- parameterized inner `test`; both titles must be captured, in source order.
+      local loop = tn.parse_loop_title(
+        [[
+        for (const { account, xrayTicket } of coldStartCurrencies) {
+          test.describe(`Cold start - ${account.currency.ticker}`, () => {
+            test(
+              `Earn v2 cold start page shows ${account.currency.ticker} ready to earn`,
+              { tag: [] },
+              async ({ app }) => {},
+            );
+          });
+        }
+      ]],
+        "coldStartCurrencies"
+      )
+      assert.equals("destructure", loop.binding.kind)
+      assert.equals(2, #loop.titles)
+      assert.equals("Cold start - %s", loop.titles[1].template)
+      assert.equals("Earn v2 cold start page shows %s ready to earn", loop.titles[2].template)
+      -- both interpolate the SAME accessor (account.currency.ticker)
+      assert.same({ { head = "account", path = { "currency", "ticker" } } }, loop.titles[1].accessors)
+      assert.same({ { head = "account", path = { "currency", "ticker" } } }, loop.titles[2].accessors)
+    end)
+
+    it("scopes titles to THIS loop when several loops share the source", function()
+      -- The body must be sliced from the requested array's header to the next
+      -- `for (const …`, so a later loop's title never leaks into an earlier one.
+      local src = [[
+        for (const { account } of coldStartCurrencies) {
+          test.describe(`Cold start - ${account.currency.ticker}`, () => {});
+        }
+        for (const { provider } of ethProviders) {
+          test.describe(`ETH staking flow - ${provider.name}`, () => {});
+        }
+      ]]
+      local cold = tn.parse_loop_title(src, "coldStartCurrencies")
+      assert.equals(1, #cold.titles)
+      assert.equals("Cold start - %s", cold.titles[1].template)
+      local eth = tn.parse_loop_title(src, "ethProviders")
+      assert.equals(1, #eth.titles)
+      assert.equals("ETH staking flow - %s", eth.titles[1].template)
+      assert.same({ { head = "provider", path = { "name" } } }, eth.titles[1].accessors)
     end)
 
     it("returns nil when the loop or a resolvable title is absent", function()
@@ -492,6 +541,85 @@ describe("ledger.builder.testnames", function()
       })
       -- .name → "lido" (NOT the uiName "Lido"): proves the accessor is honored.
       assert.same({ "Stake via lido" }, names)
+    end)
+
+    it("resolves BOTH the describe + inner test title per element (earn cold start)", function()
+      -- Mirrors earn.v2.spec.ts: a `test.describe(`Cold start - …`)` wrapping a
+      -- DISTINCT inner `test(`Earn v2 cold start … ready to earn`)`, over two
+      -- accounts → 4 concrete names (2 titles × 2 elements).
+      local names = tn.resolve_desktop_from_sources({
+        currency = [[
+          static readonly ETH = new Currency("Ethereum", "ETH", "ethereum", A, []);
+          static readonly ATOM = new Currency("Cosmos", "ATOM", "cosmos", A, []);
+        ]],
+        account = [[
+          static readonly ETH_2 = new Account(Currency.ETH, "Ethereum 2", 1, "p");
+          static readonly ATOM_2 = new Account(Currency.ATOM, "Cosmos 2", 1, "p");
+        ]],
+        specs = {
+          {
+            array = "coldStartCurrencies",
+            src = [[
+              const coldStartCurrencies = [
+                { account: Account.ETH_2, xrayTicket: "B2CQA-4640" },
+                { account: Account.ATOM_2, xrayTicket: "B2CQA-4719" },
+              ];
+              for (const { account, xrayTicket } of coldStartCurrencies) {
+                test.describe(`Cold start - ${account.currency.ticker}`, () => {
+                  test(
+                    `Earn v2 cold start page shows ${account.currency.ticker} ready to earn`,
+                    { tag: [] },
+                    async ({ app }) => {},
+                  );
+                });
+              }
+            ]],
+          },
+        },
+      })
+      -- SORTED output: both describe titles and both leaf titles, per element.
+      assert.same({
+        "Cold start - ATOM",
+        "Cold start - ETH",
+        "Earn v2 cold start page shows ATOM ready to earn",
+        "Earn v2 cold start page shows ETH ready to earn",
+      }, names)
+    end)
+
+    it("resolves an earn provider loop's leaf title via provider.name", function()
+      local names = tn.resolve_desktop_from_sources({
+        provider = [[
+          static readonly LIDO = new EarnProvider("lido", "Lido");
+          static readonly KILN = new EarnProvider("kiln_pooling", "Kiln staking Pool");
+        ]],
+        specs = {
+          {
+            array = "ethProviders",
+            src = [[
+              const ethProviders = [
+                { provider: EarnProvider.LIDO, xrayTickets: ["B2CQA-4722"] },
+                { provider: EarnProvider.KILN, xrayTickets: ["B2CQA-4724"] },
+              ];
+              for (const { provider, xrayTickets } of ethProviders) {
+                test.describe(`ETH staking flow - ${provider.name}`, () => {
+                  test(
+                    `Earn v2 ETH staking flow - ${provider.name}`,
+                    { tag: [] },
+                    async ({ app, page }) => {},
+                  );
+                });
+              }
+            ]],
+          },
+        },
+      })
+      -- provider.name → "lido"/"kiln_pooling" (the leaf CI records), sorted.
+      assert.same({
+        "ETH staking flow - kiln_pooling",
+        "ETH staking flow - lido",
+        "Earn v2 ETH staking flow - kiln_pooling",
+        "Earn v2 ETH staking flow - lido",
+      }, names)
     end)
 
     it("skips an element whose enum ref can't be resolved (no half-name)", function()
@@ -677,6 +805,69 @@ describe("ledger.builder.testnames", function()
           n:match("^Swap %- .+ flow$") or n:match("^%[.+%] Add account$"),
           "malformed desktop name: " .. n
         )
+      end
+    end)
+  end)
+
+  -- ── desktop EARN monorepo integration (skips cleanly without a checkout) ──
+  -- Guards on the DETECTED enum dir (earn's checkout moved enums to
+  -- e2e/shared/src/enum), so this actually runs against the real spec rather than
+  -- pending()-ing on the pre-refactor path. Validates the 7 parameterized `test()`
+  -- LEAF names (CI run 28432194879) are a SUBSET of the resolver output — the
+  -- resolver also emits the outer `describe` titles ("Cold start - ETH", …), which
+  -- are additional runnable names and intentionally not asserted here.
+  describe("resolve_desktop earn (monorepo)", function()
+    local ROOT = os.getenv("LEDGER_LIVE_ROOT")
+    if not ROOT or ROOT == "" then
+      ROOT = vim.fn.expand("~/src/tries/2026-04-08-LedgerHQ-ledger-live")
+    end
+    local enum_dir = tn._detect_enum_dir(ROOT)
+    local spec_dir = ROOT .. "/e2e/desktop/tests/specs"
+    local have_monorepo = vim.fn.isdirectory(ROOT) == 1
+      and vim.fn.filereadable(enum_dir .. "/Currency.ts") == 1
+      and vim.fn.filereadable(enum_dir .. "/Account.ts") == 1
+      and vim.fn.filereadable(enum_dir .. "/Provider.ts") == 1
+      and vim.fn.filereadable(spec_dir .. "/earn.v2.spec.ts") == 1
+
+    -- The 7 parameterized earn `test()` leaf names recorded by CI.
+    local EARN_GOLDEN = {
+      "Earn v2 cold start page shows ETH ready to earn",
+      "Earn v2 cold start page shows ATOM ready to earn",
+      "Earn v2 hot start page shows SOL with rewards and navigates to account",
+      "Earn v2 hot start page shows NEAR with rewards and navigates to account",
+      "Earn v2 hot start page shows ATOM with rewards and navigates to account",
+      "Earn v2 ETH staking flow - lido",
+      "Earn v2 ETH staking flow - kiln_pooling",
+    }
+
+    it("resolve_desktop includes the 7 earn leaf names, no residual '${' (or skips)", function()
+      if not have_monorepo then
+        pending("monorepo not present at " .. ROOT .. " (set LEDGER_LIVE_ROOT)")
+        return
+      end
+      local names = tn.resolve_desktop(ROOT)
+      local got = {}
+      for _, n in ipairs(names) do
+        got[n] = true
+        assert.is_nil(n:find("${", 1, true), "residual template var in: " .. n)
+      end
+      for _, g in ipairs(EARN_GOLDEN) do
+        assert.is_true(got[g] == true, "earn golden leaf name not produced by resolver: " .. g)
+      end
+    end)
+
+    it("picker_entries(desktop) pairs the 7 earn leaf names with earn.v2.spec.ts (or skips)", function()
+      if not have_monorepo then
+        pending("monorepo not present at " .. ROOT)
+        return
+      end
+      local entries = tn.picker_entries(ROOT, "desktop")
+      local spec_of = {}
+      for _, e in ipairs(entries) do
+        spec_of[e.name] = e.spec
+      end
+      for _, g in ipairs(EARN_GOLDEN) do
+        assert.equals("tests/specs/earn.v2.spec.ts", spec_of[g], "earn golden name missing/mis-specced: " .. g)
       end
     end)
   end)
