@@ -63,6 +63,9 @@ describe("ledger.builder.pipeline", function()
       proc_alive = function()
         return false
       end,
+      files_equal = function()
+        return true
+      end,
     }, over or {})
   end
 
@@ -100,6 +103,48 @@ describe("ledger.builder.pipeline", function()
     assert.is_nil(find(android, "test"))
     assert.equals("build", ios[#ios].id)
     assert.equals("build", android[#android].id)
+  end)
+
+  it("pod step is sync-aware (Pods/Manifest.lock vs Podfile.lock)", function()
+    local pod = find(pipeline.steps("mobile", { platform_flag = "ios" }), "pod")
+    assert.equals("apps/ledger-live-mobile/ios/Pods/Manifest.lock", pod.artifact)
+    assert.equals("apps/ledger-live-mobile/ios/Podfile.lock", pod.synced_with)
+    -- Manifest present + matches Podfile.lock → done
+    assert.equals(
+      "done",
+      pipeline.status(
+        pod,
+        ctx({
+          files_equal = function()
+            return true
+          end,
+        })
+      )
+    )
+    -- present but content differs → out of sync → needs_update (the reported bug)
+    assert.equals(
+      "needs_update",
+      pipeline.status(
+        pod,
+        ctx({
+          files_equal = function()
+            return false
+          end,
+        })
+      )
+    )
+    -- Manifest absent (pods never installed) → missing
+    assert.equals(
+      "missing",
+      pipeline.status(
+        pod,
+        ctx({
+          artifact_exists = function()
+            return false
+          end,
+        })
+      )
+    )
   end)
 
   it("install is diff-driven (.modules.yaml vs the lockfile); only clean is optional", function()
