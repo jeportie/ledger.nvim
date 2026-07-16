@@ -1,0 +1,13 @@
+ATOM hot start: rewards summary, position row -> manage -> account page
+ETH earn CTA -> kiln_pooling provider -> dapp
+ETH earn CTA -> lido provider -> dapp
+ETH earn CTA -> stader-eth provider -> dapp
+ETH position row -> manage -> dapp
+Inline Add Account [Ethereum]
+NEAR hot start: rewards summary, position row -> manage -> account page
+SOL earn CTA initiates staking flow
+SOL hot start: rewards summary, position row -> manage -> account page
+USDT earn CTA initiates deposit flow
+USDT position row -> withdraw all -> webview /redeem
+shows ATOM ready to earn and clicking CTA initiates staking
+shows ETH ready to earn and clicking CTA initiates staking

@@ -694,6 +694,224 @@ describe("ledger.builder.testnames", function()
     end)
   end)
 
+  -- ── mobile EARN "Shape-C": testConfig object literal + earnV2 helper titles ─
+  -- Each earn spec sets `const testConfig = { account: Account.X, provider:
+  -- EarnProvider.Y, … }` then calls `run*Test(testConfig.account,
+  -- testConfig.provider.name, …)`; the it() titles live in earnV2.ts. Titles use
+  -- account.currency.ticker, a bare providerId (bound to testConfig.provider.name),
+  -- and — the gotcha — account.currency.speculosApp.name (NEAR → "Near", ≠ ticker
+  -- "NEAR"), which needs the AppInfos table + a resolve-hop.
+  describe("mobile earn (Shape-C)", function()
+    local CURRENCY = [[
+      static readonly ETH = new Currency("Ethereum", "ETH", "ethereum", AppInfos.ETHEREUM, [Network.ETH]);
+      static readonly NEAR = new Currency("NEAR", "NEAR", "near", AppInfos.NEAR, [Network.NEAR]);
+      static readonly ATOM = new Currency("Cosmos", "ATOM", "cosmos", AppInfos.COSMOS, [Network.ATOM]);
+      static readonly ETH_USDT = new Currency("Tether USD", "USDT", "eth/usdt", AppInfos.ETHEREUM, [Network.ETH]);
+    ]]
+    local ACCOUNT = [[
+      static readonly ETH_1 = new Account(Currency.ETH, "Ethereum 1", 0);
+      static readonly ETH_2 = new Account(Currency.ETH, "Ethereum 2", 1);
+      static readonly NEAR_1 = new Account(Currency.NEAR, "Near 1", 0);
+      static readonly ETH_USDT_1 = new TokenAccount(Currency.ETH_USDT, "USDT 1", 0);
+    ]]
+    local PROVIDER = [[
+      static readonly KILN = new EarnProvider("kiln_pooling", "Kiln staking Pool");
+      static readonly STADER_LABS = new EarnProvider("stader-eth", "Stader Labs");
+    ]]
+    local APPINFOS = [[
+      static readonly ETHEREUM = new AppInfos("Ethereum");
+      static readonly NEAR = new AppInfos("Near");
+      static readonly COSMOS = new AppInfos("Cosmos");
+    ]]
+    -- earnV2.ts: helpers with describe()+it(); ice-cold-start's it is STATIC.
+    -- runPartnerDappCTATest has a multi-line signature (params over several lines).
+    local HELPER = [[
+export function runColdStartTest(account: Account, tmsLinks: string[], tags: string[]) {
+  describe(`Earn V2 - Cold start - ${account.currency.ticker}`, () => {
+    it(`shows ${account.currency.ticker} ready to earn and clicking CTA initiates staking`, async () => {});
+  });
+}
+export function runPartnerDappCTATest(
+  account: Account,
+  providerId: string,
+  dappUrlSubstring: string,
+  tmsLinks: string[],
+  tags: string[],
+) {
+  describe(`Earn V2 - CTA -> Partner dapp (${account.currency.ticker} / ${providerId})`, () => {
+    it(`${account.currency.ticker} earn CTA -> ${providerId} provider -> dapp`, async () => {});
+  });
+}
+export function runInlineAddAccountTest(account: Account, tmsLinks: string[], tags: string[]) {
+  describe("Earn V2 - Inline Add Account", () => {
+    it(`Inline Add Account [${account.currency.speculosApp.name}]`, async () => {});
+  });
+}
+export function runIceColdStartTest(account: Account, tmsLinks: string[], tags: string[]) {
+  describe("Earn V2 - Ice cold start", () => {
+    it("displays ice cold start page and CTA opens modular asset drawer", async () => {});
+  });
+}
+    ]]
+    local SPEC_COLD = [[
+import { Account } from "@ledgerhq/live-e2e-shared/enum/Account";
+import { runColdStartTest } from "./earnV2";
+const testConfig = { account: Account.ETH_2, tmsLinks: ["B2CQA-4640"], tags: ["@ethereum"] };
+runColdStartTest(testConfig.account, testConfig.tmsLinks, testConfig.tags);
+    ]]
+    local SPEC_KILN = [[
+import { Account } from "@ledgerhq/live-e2e-shared/enum/Account";
+import { EarnProvider } from "@ledgerhq/live-e2e-shared/enum/Provider";
+import { runPartnerDappCTATest } from "./earnV2";
+const testConfig = {
+  account: Account.ETH_1,
+  provider: EarnProvider.KILN,
+  dappUrlSubstring: "ledger-staking.widget.kiln.fi/earn",
+  tmsLinks: ["B2CQA-4724"],
+  tags: ["@ethereum"],
+};
+runPartnerDappCTATest(
+  testConfig.account,
+  testConfig.provider.name,
+  testConfig.dappUrlSubstring,
+  testConfig.tmsLinks,
+  testConfig.tags,
+);
+    ]]
+    -- STADER: the dappUrlSubstring carries a DECOY direct enum ref inside a
+    -- template string — it must NOT be scraped as testConfig.provider.
+    local SPEC_STADER = [[
+import { runPartnerDappCTATest } from "./earnV2";
+const testConfig = {
+  account: Account.ETH_1,
+  provider: EarnProvider.STADER_LABS,
+  dappUrlSubstring: `staderlabs.com/${Account.ETH_1.currency.ticker}`,
+  tmsLinks: ["B2CQA-1"],
+  tags: ["@ethereum"],
+};
+runPartnerDappCTATest(testConfig.account, testConfig.provider.name, testConfig.dappUrlSubstring, testConfig.tmsLinks, testConfig.tags);
+    ]]
+    -- Inline-add with NEAR proves the speculosApp.name hop resolves to the
+    -- AppInfos name "Near", NOT the ticker "NEAR" nor the currency name "NEAR".
+    local SPEC_INLINE_NEAR = [[
+import { Account } from "@ledgerhq/live-e2e-shared/enum/Account";
+import { runInlineAddAccountTest } from "./earnV2";
+const testConfig = { account: Account.NEAR_1, tmsLinks: ["B2CQA-3001"], tags: ["@near"] };
+runInlineAddAccountTest(testConfig.account, testConfig.tmsLinks, testConfig.tags);
+    ]]
+    local SPEC_ICE = [[
+import { runIceColdStartTest } from "./earnV2";
+const testConfig = { account: Account.ETH_1, tmsLinks: ["B2CQA-1"], tags: ["@x"] };
+runIceColdStartTest(testConfig.account, testConfig.tmsLinks, testConfig.tags);
+    ]]
+
+    it("parse_appinfos: SYM → display name", function()
+      local ai = tn.parse_appinfos(APPINFOS)
+      assert.equals("Ethereum", ai.ETHEREUM)
+      assert.equals("Near", ai.NEAR)
+      assert.equals("Cosmos", ai.COSMOS)
+    end)
+
+    it("parse_currency_speculos: currency SYM → AppInfos SYM (the 4th ctor arg)", function()
+      local sp = tn.parse_currency_speculos(CURRENCY)
+      assert.equals("ETHEREUM", sp.ETH)
+      assert.equals("NEAR", sp.NEAR)
+      assert.equals("COSMOS", sp.ATOM)
+      assert.equals("ETHEREUM", sp.ETH_USDT)
+    end)
+
+    it("parse_object_literal: captures account/provider, ignores a decoy in a string field", function()
+      local obj = tn.parse_object_literal(SPEC_STADER)
+      assert.same({ class = "Account", sym = "ETH_1" }, obj.account)
+      assert.same({ class = "EarnProvider", sym = "STADER_LABS" }, obj.provider)
+      assert.is_nil(obj.dappUrlSubstring) -- the ${Account.ETH_1…} decoy is not a field ref
+    end)
+
+    it("parse_earn_helpers: params + parameterized it; skips a static-it helper", function()
+      local h = tn.parse_earn_helpers(HELPER)
+      assert.same({ "account", "tmsLinks", "tags" }, h.runColdStartTest.params)
+      assert.same({ "account", "providerId", "dappUrlSubstring", "tmsLinks", "tags" }, h.runPartnerDappCTATest.params)
+      assert.is_truthy(h.runInlineAddAccountTest)
+      assert.is_nil(h.runIceColdStartTest) -- its it() is a plain string → nothing to resolve
+    end)
+
+    it("parse_earn_call: helper name + positional testConfig field/leaf args", function()
+      local c = tn.parse_earn_call(SPEC_KILN)
+      assert.equals("runPartnerDappCTATest", c.helper)
+      assert.same({ field = "account" }, c.args[1])
+      assert.same({ field = "provider", leaf = "name" }, c.args[2])
+    end)
+
+    it("resolve_earn_from_sources: ticker, provider.name, and speculosApp.name shapes", function()
+      local names = tn.resolve_earn_from_sources({
+        currency = CURRENCY,
+        account = ACCOUNT,
+        provider = PROVIDER,
+        appinfos = APPINFOS,
+        helper = HELPER,
+        specs = {
+          { src = SPEC_COLD, spec = "specs/earn/earnV2_coldStart_ETH_2.spec.ts" },
+          { src = SPEC_KILN, spec = "specs/earn/earnV2_CTA_partnerDapp_ETH_KILN.spec.ts" },
+          { src = SPEC_STADER, spec = "specs/earn/earnV2_CTA_partnerDapp_ETH_STADER_LABS.spec.ts" },
+          { src = SPEC_INLINE_NEAR, spec = "specs/earn/earnInlineAddAccount.spec.ts" },
+          { src = SPEC_ICE, spec = "specs/earn/earnV2_iceColdStart_ETH_3.spec.ts" },
+        },
+      })
+      assert.same({
+        "ETH earn CTA -> kiln_pooling provider -> dapp",
+        "ETH earn CTA -> stader-eth provider -> dapp",
+        "Inline Add Account [Near]",
+        "shows ETH ready to earn and clicking CTA initiates staking",
+      }, names)
+    end)
+
+    it("resolve_earn_from_sources: a static-it spec yields nothing (already scraped verbatim)", function()
+      local names = tn.resolve_earn_from_sources({
+        currency = CURRENCY,
+        account = ACCOUNT,
+        provider = PROVIDER,
+        appinfos = APPINFOS,
+        helper = HELPER,
+        specs = { { src = SPEC_ICE } },
+      })
+      assert.same({}, names)
+    end)
+
+    it("resolve_earn_from_sources: a missing AppInfos source drops only the speculosApp name", function()
+      local names = tn.resolve_earn_from_sources({
+        currency = CURRENCY,
+        account = ACCOUNT,
+        provider = PROVIDER, -- no appinfos → the inline-add name can't resolve
+        helper = HELPER,
+        specs = { { src = SPEC_COLD }, { src = SPEC_INLINE_NEAR } },
+      })
+      assert.same({ "shows ETH ready to earn and clicking CTA initiates staking" }, names)
+    end)
+
+    it("earn_entries_from_sources: pins each resolved name to its spec (picker wiring)", function()
+      local entries = tn.earn_entries_from_sources({
+        currency = CURRENCY,
+        account = ACCOUNT,
+        provider = PROVIDER,
+        appinfos = APPINFOS,
+        helper = HELPER,
+        specs = {
+          { src = SPEC_KILN, spec = "specs/earn/earnV2_CTA_partnerDapp_ETH_KILN.spec.ts" },
+          { src = SPEC_INLINE_NEAR, spec = "specs/earn/earnInlineAddAccount.spec.ts" },
+        },
+      })
+      local by_name = {}
+      for _, e in ipairs(entries) do
+        by_name[e.name] = e.spec
+      end
+      assert.equals(
+        "specs/earn/earnV2_CTA_partnerDapp_ETH_KILN.spec.ts",
+        by_name["ETH earn CTA -> kiln_pooling provider -> dapp"]
+      )
+      assert.equals("specs/earn/earnInlineAddAccount.spec.ts", by_name["Inline Add Account [Near]"])
+    end)
+  end)
+
   -- ── monorepo integration (skips cleanly without a checkout) ──────────────
   describe("resolve_swap (monorepo)", function()
     -- Prefer an explicit override; else fall back to the known local checkout.
@@ -872,6 +1090,54 @@ describe("ledger.builder.testnames", function()
       end
       for _, g in ipairs(EARN_GOLDEN) do
         assert.equals("tests/specs/earn.v2.spec.ts", spec_of[g], "earn golden name missing/mis-specced: " .. g)
+      end
+    end)
+  end)
+
+  -- ── mobile earn monorepo integration (skips cleanly without a checkout) ──
+  -- Guard uses _detect_enum_dir + the newest local checkout (or LEDGER_LIVE_ROOT),
+  -- so it actually runs against a present checkout rather than a pinned stale path.
+  describe("resolve_earn (monorepo)", function()
+    local ROOT = os.getenv("LEDGER_LIVE_ROOT")
+    if not ROOT or ROOT == "" then
+      local cks = vim.fn.glob(vim.fn.expand("~/src/tries") .. "/*-LedgerHQ-ledger-live", true, true)
+      table.sort(cks)
+      ROOT = cks[#cks] or vim.fn.expand("~/src/tries/2026-05-11-LedgerHQ-ledger-live")
+    end
+    local enum_dir = tn._detect_enum_dir(ROOT)
+    local earn_dir = ROOT .. "/e2e/mobile/specs/earn"
+    local have_monorepo = vim.fn.filereadable(enum_dir .. "/Currency.ts") == 1
+      and vim.fn.filereadable(enum_dir .. "/AppInfos.ts") == 1
+      and vim.fn.filereadable(earn_dir .. "/earnV2.ts") == 1
+
+    it("resolves every earn spec to a concrete it() name (or skips w/o monorepo)", function()
+      if not have_monorepo then
+        pending("monorepo not present at " .. ROOT .. " (set LEDGER_LIVE_ROOT)")
+        return
+      end
+      local names = tn.resolve_earn(ROOT)
+      assert.is_true(#names >= 13, "expected >= 13 earn names, got " .. #names)
+      for _, n in ipairs(names) do
+        assert.is_nil(n:find("${", 1, true), "residual template var in: " .. n)
+        assert.is_truthy(n:match("%S"), "empty earn name")
+      end
+    end)
+
+    it("resolved earn names are all in the CI golden fixture (or skips)", function()
+      if not have_monorepo then
+        pending("monorepo not present at " .. ROOT)
+        return
+      end
+      local here = debug.getinfo(1, "S").source:sub(2)
+      local dir = vim.fn.fnamemodify(here, ":h")
+      local golden = {}
+      for _, line in ipairs(vim.fn.readfile(dir .. "/fixtures/ci_earn_golden.txt")) do
+        if line ~= "" then
+          golden[line] = true
+        end
+      end
+      for _, n in ipairs(tn.resolve_earn(ROOT)) do
+        assert.is_true(golden[n] == true, "resolved earn name not in CI golden set: " .. n)
       end
     end)
   end)
