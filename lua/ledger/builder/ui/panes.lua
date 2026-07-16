@@ -38,6 +38,33 @@ local function fmt_dur(secs)
   return secs .. "s"
 end
 
+-- Colour an ANSI-stripped log line by test/build result vocabulary, shared by the
+-- Logs pane and the process-card tails. RED wins over GREEN so a mixed summary
+-- ("2 passed, 1 failed") reads as failure. Recognises BOTH runners: Jest prints
+-- per-test ✓/✕ glyphs; Playwright is non-TTY here (no per-test glyphs) so it's
+-- matched on its "N passed / N failed" summary + "Error:" blocks. `%d+ passed` /
+-- `%d+ failed` (a count before the word) matches the summaries without lighting up
+-- a test *title* that merely contains "failed". Classify on the ORIGINAL line
+-- (before width truncation) so a token cut off by "…" still colours.
+local FAIL_GLYPHS = { "✗", "✕", "✘", "✖" }
+local PASS_GLYPHS = { "✓", "✔" }
+local function has_any(line, set)
+  for _, g in ipairs(set) do
+    if line:find(g, 1, true) then
+      return true
+    end
+  end
+  return false
+end
+function M.log_line_hl(line)
+  if line:match("[Ee]rror") or line:match("%d+ failed") or has_any(line, FAIL_GLYPHS) then
+    return "LedgerStateFailed"
+  elseif has_any(line, PASS_GLYPHS) or line:match("%d+ passed") or line:match("[Dd]one") then
+    return "LedgerStateDone"
+  end
+  return "LedgerBuilderDim"
+end
+
 -- Titled bordered box around `content`, fixed inner width. `title_hl` colours
 -- the title text (defaults to the section-title group; process cards pass a
 -- state colour).
@@ -580,13 +607,7 @@ function M.process_popup_content(info)
       if #txt > 56 then
         txt = txt:sub(1, 55) .. "…"
       end
-      local hl = "LedgerBuilderDim"
-      if txt:match("[Ee]rror") or txt:match("✗") then
-        hl = "LedgerStateFailed"
-      elseif txt:match("✓") then
-        hl = "LedgerStateDone"
-      end
-      lines[#lines + 1] = { { txt, hl } }
+      lines[#lines + 1] = { { txt, M.log_line_hl(l) } }
     end
   end
   lines[#lines + 1] = {}
@@ -661,13 +682,7 @@ function M.logs_content(st, height, width)
     if vim.fn.strdisplaywidth(txt) > maxw then
       txt = vim.fn.strcharpart(txt, 0, maxw - 1) .. "…"
     end
-    local hl = "LedgerBuilderDim"
-    if txt:match("[Ee]rror") or txt:match("✗") then
-      hl = "LedgerStateFailed"
-    elseif txt:match("✓") or txt:match("[Dd]one") then
-      hl = "LedgerStateDone"
-    end
-    lines[#lines + 1] = { { txt, hl } }
+    lines[#lines + 1] = { { txt, M.log_line_hl(l) } }
   end
   return lines
 end
