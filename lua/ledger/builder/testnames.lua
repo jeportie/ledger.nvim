@@ -22,16 +22,23 @@
 --       test(`[${currency.currency.name}] Add account`, …)   → "[Bitcoin] Add account"
 --   → See `resolve_desktop`.
 --
--- Both resolve by evaluating the e2e enums statically (Account.ETH_1 →
--- Currency.ETH → "Ethereum"; SwapProvider.ONE_INCH → uiName "1inch"). Everything
--- is a PURE function of file contents (or a root read once), so the parsers are
+--   Shape-C (mobile earn/stake, e2e/mobile/specs/earn) — a `const testConfig =
+--   { account: Account.X, provider: EarnProvider.Y, … }` object + a
+--   `run*Test(testConfig.account, testConfig.provider.name, …)` call whose it()
+--   title lives in the helper (earnV2.ts):
+--     it(`${account.currency.ticker} earn CTA -> ${providerId} provider -> dapp`)
+--   → "ETH earn CTA -> kiln_pooling provider -> dapp". See `resolve_earn`.
+--
+-- All three resolve by evaluating the e2e enums statically (Account.ETH_1 →
+-- Currency.ETH → "Ethereum"; SwapProvider.ONE_INCH → uiName "1inch";
+-- Currency.NEAR → speculosApp AppInfos.NEAR → "Near"). Everything is a PURE
+-- function of file contents (or a root read once), so the parsers are
 -- unit-testable with tiny inline fixtures — the CI runners do NOT have the
 -- monorepo checked out.
 --
--- Deferred (NOT this PR): wiring into the picker (mobile+desktop, `-t`/`--grep`
--- escaping); model wrappers (Delegate/Transaction/Swap/BuySell) and nested
--- `speculosApp.name`; validation.swap.spec.ts (RegExp interpolation); ternary
--- titles (e.g. the XRP amount branch inside the swap body).
+-- Deferred: the `new Delegate(…)` model wrapper + the ternary it() in the two
+-- mobile stake guards (changeValidator / stopDelegation); validation.swap.spec.ts
+-- (RegExp interpolation); the ternary title in the swap body (XRP amount branch).
 
 local uv = vim.uv or vim.loop
 
@@ -303,6 +310,41 @@ function M.parse_providers(src)
   return { name = name, uiName = uiName }
 end
 
+-- Parse `AppInfos.ts` → { SYM = "Display Name" }. Each entry is
+--   static readonly ETHEREUM = new AppInfos("Ethereum");
+-- (the ctor's single string literal is the speculos-app display name). Used to
+-- resolve `currency.speculosApp.name` in the mobile-earn inline-add-account title.
+function M.parse_appinfos(src)
+  local names = {}
+  if type(src) ~= "string" then
+    return names
+  end
+  for sym, nm in src:gmatch('readonly%s+([%w_]+)%s*=%s*new%s+AppInfos%(%s*"([^"]*)"') do
+    names[sym] = nm
+  end
+  return names
+end
+
+-- Parse `Currency.ts` → { SYM = "APPINFOS_SYM" }: each currency's 4th ctor arg is
+-- its `speculosApp` (an `AppInfos.<SYM>` reference), e.g.
+--   new Currency("NEAR", "NEAR", "near", AppInfos.NEAR, …) → { NEAR = "NEAR" }.
+-- Kept SEPARATE from parse_currencies (which only captures name/ticker) so the
+-- shipped swap/desktop resolvers are untouched; the mobile-earn resolver bundles
+-- this + parse_appinfos to walk currency → speculosApp → name.
+function M.parse_currency_speculos(src)
+  local speculos = {}
+  if type(src) ~= "string" then
+    return speculos
+  end
+  for sym, args in src:gmatch("readonly%s+([%w_]+)%s*=%s*new%s+Currency%((.-)%)%s*;") do
+    local app = args:match("AppInfos%.([%w_]+)")
+    if app then
+      speculos[sym] = app
+    end
+  end
+  return speculos
+end
+
 -- An "enums" bundle groups every parsed enum family so a single accessor
 -- resolver can walk any `Class.SYM.leaf` chain. `accounts` join through
 -- currencies (an account has no display name of its own).
@@ -379,7 +421,11 @@ end
 -- etc.). `template` has each `${…}` replaced by `%s`; `accessors` lists, per
 -- slot, the split accessor (head = first identifier, path = the remaining dotted
 -- segments). Shared by every title form so the resolver treats them uniformly.
-local function split_title(raw)
+-- `min_segs` (default 2) is the fewest segments an interpolation must have; the
+-- mobile-earn helper titles pass 1 to allow a bare `${param}` (e.g. `${providerId}`)
+-- that binds to a call arg elsewhere.
+local function split_title(raw, min_segs)
+  min_segs = min_segs or 2
   local accessors = {}
   local ok = true
   local template = raw:gsub("%${([^}]*)}", function(expr)
@@ -392,7 +438,7 @@ local function split_title(raw)
     for s in chain:gmatch("[%w_]+") do
       segs[#segs + 1] = s
     end
-    if #segs < 2 then
+    if #segs < min_segs then
       ok = false
       return "${" .. expr .. "}"
     end
@@ -662,6 +708,7 @@ local ENUM_DIRS = {
   "libs/ledger-live-common/src/e2e/enum",
 }
 local SWAP_DIR = "e2e/mobile/specs/swap"
+local MOBILE_EARN_DIR = "e2e/mobile/specs/earn"
 
 -- First enum dir whose Currency.ts is readable (else the new-path default, whose
 -- upstream read then fails → {}). `_`-exposed for unit tests.
@@ -802,6 +849,292 @@ function M.resolve_desktop(root, opts)
   return acc.names
 end
 
+-- ── MOBILE "Shape-C": testConfig object literal + earnV2 helper titles ──────
+--
+-- Mobile earn/stake (e2e/mobile/specs/earn) parameterizes a THIRD way. Each spec
+-- declares one object literal and calls a helper with its fields:
+--   const testConfig = { account: Account.ETH_1, provider: EarnProvider.KILN, … };
+--   runPartnerDappCTATest(testConfig.account, testConfig.provider.name, …);
+-- and the it() title lives in the HELPER (earnV2.ts), e.g.
+--   it(`${account.currency.ticker} earn CTA -> ${providerId} provider -> dapp`)
+--   → "ETH earn CTA -> kiln_pooling provider -> dapp".
+-- Resolution binds each title placeholder (a helper PARAM) to the matching
+-- positional call arg (a testConfig field, maybe with a `.name` leaf), reads that
+-- field's enum ref from the object, and walks the accessor chain. Unlike swap
+-- (direct Account.X args) the args are indirect; unlike desktop the titles come
+-- from the helper, not the spec — hence a dedicated resolver.
+
+-- Parse a single `const <name> = { … }` object literal → { field = {class, sym} }
+-- for enum-ref fields (string/array fields ignored). `name` may be nil to grab the
+-- first `const … = { … }`. Uses a balanced-brace scan (not `{(.-)}`) so a `${…}`
+-- inside a string field — e.g. dappUrlSubstring: `…/${Account.X.currency.ticker}`
+-- — neither truncates the object nor is scraped as a field ref.
+function M.parse_object_literal(src, name)
+  if type(src) ~= "string" then
+    return nil
+  end
+  local pat = name and ("const%s+" .. name .. "%s*=%s*{") or "const%s+[%w_]+%s*=%s*{"
+  local _, open = src:find(pat)
+  if not open then
+    return nil
+  end
+  -- Balance from the opening brace. A `${` adds one `{` and its `}` closes it, so
+  -- brace counting stays correct across interpolations.
+  local depth, body_start, body_end = 0, nil, nil
+  for i = open, #src do
+    local c = src:sub(i, i)
+    if c == "{" then
+      depth = depth + 1
+      if depth == 1 then
+        body_start = i + 1
+      end
+    elseif c == "}" then
+      depth = depth - 1
+      if depth == 0 then
+        body_end = i - 1
+        break
+      end
+    end
+  end
+  if not body_end then
+    return nil
+  end
+  local fields = {}
+  for key, class, sym in src:sub(body_start, body_end):gmatch("([%w_]+)%s*:%s*([%w_]+)%.([%w_]+)") do
+    if ENUM_CLASSES[class] then
+      fields[key] = { class = class, sym = sym }
+    end
+  end
+  return fields
+end
+
+-- Parse earnV2.ts → { helperName = { params = { "account", … },
+--   it = { template = "…%s…", accessors = { {head=,path=}, … } } } }, one entry
+-- per exported `run*Test` whose it() title is PARAMETERIZED. A helper with a
+-- static it() (ice-cold-start) is omitted — its title is already picked up by the
+-- raw scrape. Each helper's body is sliced from its header to the next
+-- `export function` so its it() is attributed correctly.
+function M.parse_earn_helpers(src)
+  local helpers = {}
+  if type(src) ~= "string" then
+    return helpers
+  end
+  local heads = {}
+  for at, name, params in src:gmatch("()export%s+function%s+(run[%w_]*Test)%s*%((.-)%)") do
+    heads[#heads + 1] = { at = at, name = name, params = params }
+  end
+  for i, h in ipairs(heads) do
+    local body = src:sub(h.at, (heads[i + 1] and heads[i + 1].at - 1) or #src)
+    local params = {}
+    for p in h.params:gmatch("[^,]+") do
+      local id = p:match("^%s*([%w_]+)")
+      if id then
+        params[#params + 1] = id
+      end
+    end
+    -- First parameterized it(`…`) in the body. Frontier `%f[%w_]` keeps `it` a
+    -- whole token (never matches inside `await(`, `wait(`, …).
+    local it_title
+    for raw in body:gmatch("%f[%w_]it%s*%(%s*`([^`]*)`") do
+      if raw:find("%${") then
+        it_title = split_title(raw, 1) -- earn titles allow a bare `${param}`
+        if it_title then
+          break
+        end
+      end
+    end
+    if it_title then
+      helpers[h.name] = { params = params, it = it_title }
+    end
+  end
+  return helpers
+end
+
+-- Parse a spec's `run*Test(testConfig.a, testConfig.b.name, …)` call → { helper=,
+-- args = { { field=, leaf= }, … } } in positional order. `leaf` is the arg-side
+-- accessor (`name` in testConfig.provider.name), nil when absent. A literal
+-- (non-testConfig) arg keeps its slot as {} so param↔arg indices stay aligned.
+function M.parse_earn_call(src)
+  if type(src) ~= "string" then
+    return nil
+  end
+  local helper, args_str = src:match("(run[%w_]*Test)%s*%((.-)%)")
+  if not helper then
+    return nil
+  end
+  local args = {}
+  for a in args_str:gmatch("[^,]+") do
+    if a:match("%S") then
+      local field, leaf = a:match("testConfig%.([%w_]+)%.?([%w_]*)")
+      if field then
+        args[#args + 1] = { field = field, leaf = (leaf ~= "" and leaf) or nil }
+      else
+        args[#args + 1] = {}
+      end
+    end
+  end
+  return { helper = helper, args = args }
+end
+
+-- Walk a property path from an enum ref { class, sym } to a concrete string.
+-- Nodes: account (currency → currency ref), currency (name/ticker → string;
+-- speculosApp → appinfos ref), appinfos (name → string), provider (name/uiName →
+-- string). Returns nil on any unknown/unresolved hop. `enums` bundles currencies,
+-- accounts, providers, speculos (currency SYM → appinfos SYM) and appinfos
+-- (appinfos SYM → name).
+local function earn_walk(enums, class, sym, path)
+  local node = { family = ENUM_CLASSES[class], sym = sym }
+  for _, seg in ipairs(path) do
+    local f = node.family
+    if f == "account" then
+      if seg ~= "currency" then
+        return nil
+      end
+      local cur = enums.accounts and enums.accounts[node.sym]
+      if not cur then
+        return nil
+      end
+      node = { family = "currency", sym = cur }
+    elseif f == "currency" then
+      local c = enums.currencies or {}
+      if seg == "name" then
+        return c.name and c.name[node.sym]
+      elseif seg == "ticker" then
+        return c.ticker and c.ticker[node.sym]
+      elseif seg == "speculosApp" then
+        local app = enums.speculos and enums.speculos[node.sym]
+        if not app then
+          return nil
+        end
+        node = { family = "appinfos", sym = app }
+      else
+        return nil
+      end
+    elseif f == "appinfos" then
+      if seg == "name" then
+        return enums.appinfos and enums.appinfos[node.sym]
+      end
+      return nil
+    elseif f == "provider" then
+      local p = enums.providers or {}
+      if seg == "name" then
+        return p.name and p.name[node.sym]
+      elseif seg == "uiName" then
+        return p.uiName and p.uiName[node.sym]
+      end
+      return nil
+    else
+      return nil
+    end
+  end
+  return nil -- path did not terminate on a string leaf
+end
+
+-- Build the earn enum bundle from source strings (currencies/accounts/providers +
+-- the speculos ref map + appinfos names).
+local function earn_enums(sources)
+  return {
+    currencies = M.parse_currencies(sources.currency),
+    accounts = M.parse_accounts(sources.account),
+    providers = M.parse_providers(sources.provider),
+    speculos = M.parse_currency_speculos(sources.currency),
+    appinfos = M.parse_appinfos(sources.appinfos),
+  }
+end
+
+-- Resolve every earn spec into `acc` (a { seen, names[, entries] } accumulator).
+-- Per spec: read its testConfig object + the run*Test call, look up the helper's
+-- parameterized it() title, bind each placeholder (a param) to its positional call
+-- arg, and walk (arg leaf ++ title path) from the field's enum ref. Emits only
+-- when EVERY placeholder resolves — never a half-resolved name.
+local function earn_resolve_into(acc, enums, helpers, specs)
+  for _, spec in ipairs(specs) do
+    local src = type(spec) == "table" and spec.src or spec
+    local spec_rel = type(spec) == "table" and spec.spec or nil
+    local obj = M.parse_object_literal(src)
+    local call = M.parse_earn_call(src)
+    local helper = call and helpers[call.helper]
+    if obj and helper then
+      local idx = {}
+      for i, p in ipairs(helper.params) do
+        idx[p] = i
+      end
+      local values, complete = {}, true
+      for _, a in ipairs(helper.it.accessors) do
+        local arg = idx[a.head] and call.args[idx[a.head]]
+        local ref = arg and arg.field and obj[arg.field]
+        if not ref then
+          complete = false
+          break
+        end
+        local path = {}
+        if arg.leaf then
+          path[#path + 1] = arg.leaf
+        end
+        for _, seg in ipairs(a.path) do
+          path[#path + 1] = seg
+        end
+        local v = earn_walk(enums, ref.class, ref.sym, path)
+        if not v then
+          complete = false
+          break
+        end
+        values[#values + 1] = v
+      end
+      if complete then
+        emit(acc, string.format(helper.it.template, unpack(values)), spec_rel)
+      end
+    end
+  end
+end
+
+-- Pure Shape-C end-to-end from source strings (no disk). Mirrors
+-- resolve_swap_from_sources / resolve_desktop_from_sources.
+--   sources = { currency=, account=, provider=, appinfos=, helper=,
+--               specs = { { src=, spec= } | <src string>, … } }
+function M.resolve_earn_from_sources(sources)
+  sources = sources or {}
+  local acc = { seen = {}, names = {} }
+  earn_resolve_into(acc, earn_enums(sources), M.parse_earn_helpers(sources.helper), sources.specs or {})
+  table.sort(acc.names)
+  return acc.names
+end
+
+-- Same, but returns { { name=, spec= }, … } (unsorted) for the picker.
+function M.earn_entries_from_sources(sources)
+  sources = sources or {}
+  local acc = { seen = {}, names = {}, entries = {} }
+  earn_resolve_into(acc, earn_enums(sources), M.parse_earn_helpers(sources.helper), sources.specs or {})
+  return acc.entries
+end
+
+-- Resolve every mobile-earn test name from a monorepo checkout at `root`. Returns
+-- a SORTED, de-duplicated list of concrete it() names, or {} when the monorepo (or
+-- a required source) is absent. `opts` (optional): { enum_dir=, earn_dir= }.
+function M.resolve_earn(root, opts)
+  opts = opts or {}
+  if type(root) ~= "string" or root == "" then
+    return {}
+  end
+  local enum_dir = opts.enum_dir or M._detect_enum_dir(root)
+  local earn_dir = opts.earn_dir or (root .. "/" .. MOBILE_EARN_DIR)
+  local specs = {}
+  for _, spec in ipairs(vim.fn.glob(earn_dir .. "/*.spec.ts", true, true)) do
+    local s = read_file(spec)
+    if s then
+      specs[#specs + 1] = { src = s, spec = "specs/earn/" .. vim.fn.fnamemodify(spec, ":t") }
+    end
+  end
+  return M.resolve_earn_from_sources({
+    currency = read_file(enum_dir .. "/Currency.ts"),
+    account = read_file(enum_dir .. "/Account.ts"),
+    provider = read_file(enum_dir .. "/Provider.ts"),
+    appinfos = read_file(enum_dir .. "/AppInfos.ts"),
+    helper = read_file(earn_dir .. "/earnV2.ts"),
+    specs = specs,
+  })
+end
+
 -- ── run-by-name picker wiring ───────────────────────────────────────────────
 
 -- Concrete names paired with the .spec.ts that runs each, from source strings
@@ -879,23 +1212,53 @@ function M.picker_entries(root, platform)
     })
   end
 
-  local helper = read_file(root .. "/" .. SWAP_DIR .. "/swap.ts")
-  if not helper then
-    return {}
-  end
-  local specs = {}
-  for _, spec in ipairs(vim.fn.glob(root .. "/" .. SWAP_DIR .. "/*.spec.ts", true, true)) do
-    local src = read_file(spec)
-    if src then
-      specs[#specs + 1] = { src = src, spec = "specs/swap/" .. vim.fn.fnamemodify(spec, ":t") }
+  -- Mobile: swap (Shape-A) + earn (Shape-C), concatenated. Either family may be
+  -- absent (missing helper) while the other still resolves.
+  local entries = {}
+  local swap_helper = read_file(root .. "/" .. SWAP_DIR .. "/swap.ts")
+  if swap_helper then
+    local specs = {}
+    for _, spec in ipairs(vim.fn.glob(root .. "/" .. SWAP_DIR .. "/*.spec.ts", true, true)) do
+      local src = read_file(spec)
+      if src then
+        specs[#specs + 1] = { src = src, spec = "specs/swap/" .. vim.fn.fnamemodify(spec, ":t") }
+      end
+    end
+    for _, e in
+      ipairs(M.picker_entries_from_sources("mobile", {
+        currency = currency,
+        account = account,
+        helper = swap_helper,
+        specs = specs,
+      }))
+    do
+      entries[#entries + 1] = e
     end
   end
-  return M.picker_entries_from_sources("mobile", {
-    currency = currency,
-    account = account,
-    helper = helper,
-    specs = specs,
-  })
+  local earn_dir = root .. "/" .. MOBILE_EARN_DIR
+  local earn_helper = read_file(earn_dir .. "/earnV2.ts")
+  if earn_helper then
+    local specs = {}
+    for _, spec in ipairs(vim.fn.glob(earn_dir .. "/*.spec.ts", true, true)) do
+      local src = read_file(spec)
+      if src then
+        specs[#specs + 1] = { src = src, spec = "specs/earn/" .. vim.fn.fnamemodify(spec, ":t") }
+      end
+    end
+    for _, e in
+      ipairs(M.earn_entries_from_sources({
+        currency = currency,
+        account = account,
+        provider = read_file(enum_dir .. "/Provider.ts"),
+        appinfos = read_file(enum_dir .. "/AppInfos.ts"),
+        helper = earn_helper,
+        specs = specs,
+      }))
+    do
+      entries[#entries + 1] = e
+    end
+  end
+  return entries
 end
 
 return M
