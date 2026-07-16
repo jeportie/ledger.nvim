@@ -8,6 +8,21 @@
 local tn = require("ledger.builder.testnames")
 
 describe("ledger.builder.testnames", function()
+  -- Locate a local ledger-live checkout for the monorepo-integration tests:
+  -- LEDGER_LIVE_ROOT if set, else the NEWEST ~/src/tries/*-LedgerHQ-ledger-live
+  -- (follow checkout vintages instead of pinning a stale dated path, which is why
+  -- these tests used to pending() even with a checkout present). Pair with
+  -- tn._detect_enum_dir(ROOT) so the enum path tracks the #19312 relocation too.
+  local function find_monorepo()
+    local root = os.getenv("LEDGER_LIVE_ROOT")
+    if root and root ~= "" then
+      return root
+    end
+    local cks = vim.fn.glob(vim.fn.expand("~/src/tries") .. "/*-LedgerHQ-ledger-live", true, true)
+    table.sort(cks)
+    return cks[#cks] or vim.fn.expand("~/src/tries/2026-05-11-LedgerHQ-ledger-live")
+  end
+
   -- ── enum dir detection (moved to e2e/shared after the refactor) ─────────
   describe("_detect_enum_dir", function()
     local function mk(rel)
@@ -914,14 +929,9 @@ runIceColdStartTest(testConfig.account, testConfig.tmsLinks, testConfig.tags);
 
   -- ── monorepo integration (skips cleanly without a checkout) ──────────────
   describe("resolve_swap (monorepo)", function()
-    -- Prefer an explicit override; else fall back to the known local checkout.
-    local ROOT = os.getenv("LEDGER_LIVE_ROOT")
-    if not ROOT or ROOT == "" then
-      ROOT = vim.fn.expand("~/src/tries/2026-04-08-LedgerHQ-ledger-live")
-    end
-    local enum_dir = ROOT .. "/libs/ledger-live-common/src/e2e/enum"
-    local have_monorepo = vim.fn.isdirectory(ROOT) == 1
-      and vim.fn.filereadable(enum_dir .. "/Currency.ts") == 1
+    local ROOT = find_monorepo()
+    local enum_dir = tn._detect_enum_dir(ROOT)
+    local have_monorepo = vim.fn.filereadable(enum_dir .. "/Currency.ts") == 1
       and vim.fn.filereadable(enum_dir .. "/Account.ts") == 1
       and vim.fn.isdirectory(ROOT .. "/e2e/mobile/specs/swap") == 1
 
@@ -954,10 +964,10 @@ runIceColdStartTest(testConfig.account, testConfig.tmsLinks, testConfig.tags);
         end
       end
       local names = tn.resolve_swap(ROOT)
-      -- Every locally-resolved name should be in the CI golden set. (This holds
-      -- for the 2026-04-08 checkout vs. the 2026-06-30 CI run; a future drift
-      -- would surface here and is expected to be explained, not hard-failed in
-      -- CI — this assertion only runs locally where the monorepo exists.)
+      -- Every locally-resolved name should be in the CI golden set. A future
+      -- drift (checkout vs. the CI-derived golden) surfaces here and is expected
+      -- to be explained, not hard-failed — this runs only locally, where the
+      -- monorepo exists.
       for _, n in ipairs(names) do
         assert.is_true(golden[n] == true, "resolved name not in CI golden set: " .. n)
       end
@@ -966,19 +976,15 @@ runIceColdStartTest(testConfig.account, testConfig.tmsLinks, testConfig.tags);
 
   -- ── desktop monorepo integration (skips cleanly without a checkout) ──────
   describe("resolve_desktop (monorepo)", function()
-    local ROOT = os.getenv("LEDGER_LIVE_ROOT")
-    if not ROOT or ROOT == "" then
-      ROOT = vim.fn.expand("~/src/tries/2026-04-08-LedgerHQ-ledger-live")
-    end
-    local enum_dir = ROOT .. "/libs/ledger-live-common/src/e2e/enum"
+    local ROOT = find_monorepo()
+    local enum_dir = tn._detect_enum_dir(ROOT)
     local spec_dir = ROOT .. "/e2e/desktop/tests/specs"
-    local have_monorepo = vim.fn.isdirectory(ROOT) == 1
-      and vim.fn.filereadable(enum_dir .. "/Currency.ts") == 1
+    local have_monorepo = vim.fn.filereadable(enum_dir .. "/Currency.ts") == 1
       and vim.fn.filereadable(enum_dir .. "/Provider.ts") == 1
       and vim.fn.filereadable(spec_dir .. "/provider.swap.spec.ts") == 1
       and vim.fn.filereadable(spec_dir .. "/add.account.spec.ts") == 1
 
-    -- Load the 19-name desktop golden fixture (next to this spec file).
+    -- Load the desktop golden fixture (next to this spec file).
     local function load_golden()
       local here = debug.getinfo(1, "S").source:sub(2)
       local dir = vim.fn.fnamemodify(here, ":h")
@@ -991,7 +997,7 @@ runIceColdStartTest(testConfig.account, testConfig.tmsLinks, testConfig.tags);
       return golden
     end
 
-    it("resolves the two M1 specs → the 19 CI golden names (or skips)", function()
+    it("resolve_desktop matches the CI golden set exactly (or skips)", function()
       if not have_monorepo then
         pending("monorepo not present at " .. ROOT .. " (set LEDGER_LIVE_ROOT)")
         return
@@ -1000,7 +1006,8 @@ runIceColdStartTest(testConfig.account, testConfig.tmsLinks, testConfig.tags);
       local golden = load_golden()
 
       -- Compared as a SET (order is not load-bearing; the fixture is byte-sorted
-      -- like the resolver's output but the assertion doesn't depend on it).
+      -- like the resolver's output but the assertion doesn't depend on it). The
+      -- golden covers every Shape-B spec: provider.swap + add.account + earn.v2.
       local got = {}
       for _, n in ipairs(names) do
         got[n] = true
@@ -1011,22 +1018,21 @@ runIceColdStartTest(testConfig.account, testConfig.tmsLinks, testConfig.tags);
       for g in pairs(golden) do
         assert.is_true(got[g] == true, "golden name not produced by resolver: " .. g)
       end
-      assert.equals(19, #names, "expected exactly the 19 M1 desktop names, got " .. #names)
     end)
 
-    it("every resolved desktop name is well-formed with no residual '${'", function()
+    it("every resolved desktop name is non-empty with no residual '${'", function()
       if not have_monorepo then
         pending("monorepo not present at " .. ROOT)
         return
       end
       local names = tn.resolve_desktop(ROOT)
       for _, n in ipairs(names) do
-        -- coverage metric: 0 titles retain an unresolved template var.
+        -- coverage metric: 0 titles retain an unresolved template var. (The old
+        -- ^Swap - … flow$ / [ … ] Add account$ shape check is dropped: earn.v2
+        -- adds varied title forms — "Cold start - ATOM", "Earn v2 …" — that are
+        -- legitimate names beyond the two M1 shapes.)
         assert.is_nil(n:find("${", 1, true), "residual template var in: " .. n)
-        assert.is_truthy(
-          n:match("^Swap %- .+ flow$") or n:match("^%[.+%] Add account$"),
-          "malformed desktop name: " .. n
-        )
+        assert.is_truthy(n:match("%S"), "empty desktop name: " .. n)
       end
     end)
   end)
@@ -1039,10 +1045,7 @@ runIceColdStartTest(testConfig.account, testConfig.tmsLinks, testConfig.tags);
   -- resolver also emits the outer `describe` titles ("Cold start - ETH", …), which
   -- are additional runnable names and intentionally not asserted here.
   describe("resolve_desktop earn (monorepo)", function()
-    local ROOT = os.getenv("LEDGER_LIVE_ROOT")
-    if not ROOT or ROOT == "" then
-      ROOT = vim.fn.expand("~/src/tries/2026-04-08-LedgerHQ-ledger-live")
-    end
+    local ROOT = find_monorepo()
     local enum_dir = tn._detect_enum_dir(ROOT)
     local spec_dir = ROOT .. "/e2e/desktop/tests/specs"
     local have_monorepo = vim.fn.isdirectory(ROOT) == 1
@@ -1095,15 +1098,8 @@ runIceColdStartTest(testConfig.account, testConfig.tmsLinks, testConfig.tags);
   end)
 
   -- ── mobile earn monorepo integration (skips cleanly without a checkout) ──
-  -- Guard uses _detect_enum_dir + the newest local checkout (or LEDGER_LIVE_ROOT),
-  -- so it actually runs against a present checkout rather than a pinned stale path.
   describe("resolve_earn (monorepo)", function()
-    local ROOT = os.getenv("LEDGER_LIVE_ROOT")
-    if not ROOT or ROOT == "" then
-      local cks = vim.fn.glob(vim.fn.expand("~/src/tries") .. "/*-LedgerHQ-ledger-live", true, true)
-      table.sort(cks)
-      ROOT = cks[#cks] or vim.fn.expand("~/src/tries/2026-05-11-LedgerHQ-ledger-live")
-    end
+    local ROOT = find_monorepo()
     local enum_dir = tn._detect_enum_dir(ROOT)
     local earn_dir = ROOT .. "/e2e/mobile/specs/earn"
     local have_monorepo = vim.fn.filereadable(enum_dir .. "/Currency.ts") == 1

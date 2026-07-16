@@ -1,3 +1,17 @@
+Cold start - ATOM
+Cold start - ETH
+ETH staking flow - kiln_pooling
+ETH staking flow - lido
+Earn v2 ETH staking flow - kiln_pooling
+Earn v2 ETH staking flow - lido
+Earn v2 cold start page shows ATOM ready to earn
+Earn v2 cold start page shows ETH ready to earn
+Earn v2 hot start page shows ATOM with rewards and navigates to account
+Earn v2 hot start page shows NEAR with rewards and navigates to account
+Earn v2 hot start page shows SOL with rewards and navigates to account
+Hot start & Position - ATOM
+Hot start & Position - NEAR
+Hot start & Position - SOL
 Swap - 1inch flow
 Swap - OKX flow
 [Aleo] Add account
@@ -10,6 +24,7 @@ Swap - OKX flow
 [Cosmos] Add account
 [Ethereum Classic] Add account
 [Ethereum] Add account
+[Gram] Add account
 [Polkadot] Add account
 [Solana] Add account
 [Stellar] Add account
