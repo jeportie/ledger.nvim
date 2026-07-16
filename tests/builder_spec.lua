@@ -815,6 +815,52 @@ describe("ledger.builder.ui.panes", function()
     tasks.tasks["spec.logtest"] = nil
   end)
 
+  it("log_line_hl colours result lines for Jest AND Playwright; noise stays dim", function()
+    local cases = {
+      -- Playwright (non-TTY) summary — the previously-uncoloured desktop case
+      { "  3 passed (2.4m)", "LedgerStateDone" },
+      { "  1 failed", "LedgerStateFailed" },
+      { "  2 passed (2.4m)", "LedgerStateDone" },
+      -- mixed summary → RED wins (a failure anywhere reads as failure)
+      { "Tests: 2 passed, 1 failed, 3 total", "LedgerStateFailed" },
+      { "Error: expect(received).toBe(expected)", "LedgerStateFailed" },
+      -- Jest per-test glyphs (mobile, unchanged)
+      { "  ✓ should swap Bitcoin to Ethereum", "LedgerStateDone" },
+      { "  ✕ should fail the swap", "LedgerStateFailed" },
+      -- build-step vocabulary still works
+      { "Done in 3.2s", "LedgerStateDone" },
+      -- the interleaved CLI/Speculos/test-start noise must stay dim, NOT be
+      -- mistaken for a result (no count-before-word, no glyph, no "error")
+      { "[CLI] Executing: ledger-live liveData --currency Ethereum", "LedgerBuilderDim" },
+      { "[1/3] provider.swap.spec.ts:62:9 › Swap - 1inch flow @ethereum", "LedgerBuilderDim" },
+      { "Speculos speculosID-abc Ethereum started on port 64163", "LedgerBuilderDim" },
+    }
+    for _, c in ipairs(cases) do
+      -- pack the line into the assert so a mismatch prints which line failed
+      assert.same({ c[1], c[2] }, { c[1], panes.log_line_hl(c[1]) })
+    end
+  end)
+
+  it("logs_content applies log_line_hl per line (Playwright summary → done, noise → dim)", function()
+    require("ledger.tasks").inject("spec.pwlog", {
+      "Running 3 tests using 3 workers",
+      "[CLI] Executing: ledger-live liveData",
+      "  3 passed (2.4m)",
+    }, 0)
+    local st = vim.tbl_extend("force", {}, fake, { log_id = "spec.pwlog", bottom = "logs" })
+    local out = panes.logs_content(st, 10, 80)
+    local function hl_of(sub)
+      for _, ln in ipairs(out) do
+        if (ln[1] and ln[1][1] or ""):find(sub, 1, true) then
+          return ln[1][2]
+        end
+      end
+    end
+    assert.equals("LedgerStateDone", hl_of("3 passed"))
+    assert.equals("LedgerBuilderDim", hl_of("[CLI] Executing"))
+    require("ledger.tasks").tasks["spec.pwlog"] = nil
+  end)
+
   it("stats panes start with a blank line and the chart fills the card", function()
     local history = require("ledger.builder.history")
     history._entries = {} -- seed in-memory only (no disk write → no cross-spec coupling)
