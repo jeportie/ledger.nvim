@@ -269,6 +269,65 @@ describe("ledger.builder.pipeline", function()
     assert.equals("ready", pipeline.target_state(steps, clean_idle))
   end)
 
+  it("cascade_stale: install not-done invalidates downstream done steps (deps → libs/cli/build)", function()
+    local steps = pipeline.steps("desktop")
+    local function all(s)
+      local m = {}
+      for _, step in ipairs(steps) do
+        m[step.id] = s
+      end
+      return m
+    end
+    -- everything done + install done → untouched
+    local ok = all("done")
+    assert.same(ok, pipeline.cascade_stale(steps, ok))
+    -- install needs_update → libs/cli/build downgraded; install kept; clean (optional) untouched
+    local st = all("done")
+    st.install = "needs_update"
+    st.clean = "idle"
+    local out = pipeline.cascade_stale(steps, st)
+    assert.equals("needs_update", out.install)
+    assert.equals("needs_update", out.libs)
+    assert.equals("needs_update", out.cli)
+    assert.equals("needs_update", out.build)
+    assert.equals("idle", out.clean) -- optional, never cascaded
+    -- install missing also cascades
+    local miss = all("done")
+    miss.install = "missing"
+    assert.equals("needs_update", pipeline.cascade_stale(steps, miss).libs)
+    -- only a "done" step is downgraded; failed / missing downstream are left as-is
+    local mixed = all("done")
+    mixed.install = "needs_update"
+    mixed.libs = "failed"
+    mixed.cli = "missing"
+    local m2 = pipeline.cascade_stale(steps, mixed)
+    assert.equals("failed", m2.libs)
+    assert.equals("missing", m2.cli)
+    assert.equals("needs_update", m2.build)
+  end)
+
+  it("cascade_stale: install done leaves a cached-done libs alone", function()
+    local steps = pipeline.steps("desktop")
+    local st = { clean = "idle", install = "done", libs = "done", cli = "done", build = "needs_update" }
+    local out = pipeline.cascade_stale(steps, st)
+    assert.equals("done", out.libs)
+    assert.equals("done", out.cli)
+    assert.equals("needs_update", out.build) -- its own status, unchanged
+  end)
+
+  it("cascade_stale (iOS): a stale install also invalidates pod + build", function()
+    local steps = pipeline.steps("mobile", { platform_flag = "ios" })
+    local st = {}
+    for _, step in ipairs(steps) do
+      st[step.id] = "done"
+    end
+    st.install = "needs_update"
+    local out = pipeline.cascade_stale(steps, st)
+    assert.equals("needs_update", out.pod)
+    assert.equals("needs_update", out.build)
+    assert.equals("needs_update", out.libs)
+  end)
+
   it("resolves the detox-binary sentinel via ctx", function()
     local build = find(pipeline.steps("mobile", { platform_flag = "ios" }), "build")
     local path = pipeline.resolve_artifact(build, ctx())

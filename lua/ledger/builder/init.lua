@@ -304,6 +304,10 @@ local function refresh_statuses()
       state.statuses[step.id] = pipeline.status(step, ctx)
     end
   end
+  -- Downstream invalidation: a not-done `install` (deps) invalidates the cached
+  -- "done" of libs/cli/build (+ pod) that were built against it — so `run all`
+  -- rebuilds them rather than skipping to a build:testing that fails on stale deps.
+  state.statuses = pipeline.cascade_stale(state.steps, state.statuses)
   -- clean: "recommended" when a build/install step failed (you must clean before
   -- rebuilding); "idle" otherwise. "in_progress" (set above) always wins.
   for _, step in ipairs(state.steps) do
