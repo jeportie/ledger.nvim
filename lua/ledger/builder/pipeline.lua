@@ -276,4 +276,33 @@ function M.target_state(steps, statuses)
   return all_done and "ready" or "not_ready"
 end
 
+-- Downstream invalidation. `install` (node_modules) is the root input every build
+-- step consumes; libs/cli/build read "done" from the Nx cache or an artifact
+-- mtime, blind to a deps change, and pod's own sync check is evaluated before a
+-- fresh install can rewrite Podfile.lock. So while `install` is NOT done
+-- (needs_update / missing / failed / in_progress), any later non-optional step
+-- still reading "done" was built against now-outdated deps → downgrade it to
+-- "needs_update". This flows into `run all` (whose plan runs the non-done steps,
+-- snapshotted up front) so a fresh install is always followed by a rebuild of
+-- deps/CLI/app/pods — instead of skipping straight to a build:testing that then
+-- fails on stale libs. Only a step already "done" is downgraded; missing / failed
+-- / needs_update are left as-is. Pure; the controller applies it after computing
+-- the per-step statuses.
+function M.cascade_stale(steps, statuses)
+  local out = {}
+  for k, v in pairs(statuses or {}) do
+    out[k] = v
+  end
+  -- No install step, or install already done → nothing downstream is deps-stale.
+  if out.install == nil or out.install == "done" then
+    return out
+  end
+  for _, step in ipairs(steps or {}) do
+    if not step.optional and step.id ~= "install" and out[step.id] == "done" then
+      out[step.id] = "needs_update"
+    end
+  end
+  return out
+end
+
 return M
