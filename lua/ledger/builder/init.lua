@@ -271,6 +271,13 @@ local function refresh_statuses()
     detox_binary = function(c)
       return detox.binary_paths[c]
     end,
+    -- Newest apps/ledger-live-desktop/.webpack/*.bundle.js (abs) — rspack's
+    -- incremental build rewrites only changed chunks, so a fixed main.bundle.js
+    -- lags the source after a build; the newest bundle is the true freshness mark.
+    desktop_bundle = function()
+      local dir = state.root .. "/apps/ledger-live-desktop/.webpack"
+      return pipeline.newest_bundle(vim.fn.glob(dir .. "/*.bundle.js", true, true), vim.fn.getftime)
+    end,
     artifact_exists = function(path)
       return uv.fs_stat(path) ~= nil
     end,

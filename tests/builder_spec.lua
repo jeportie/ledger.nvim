@@ -44,6 +44,33 @@ describe("ledger.builder.staleness", function()
       end)
     )
   end)
+
+  -- Regression (the reported false-positive): rspack's incremental build rewrites
+  -- only the changed chunk, so main.bundle.js can predate the source even right
+  -- after a successful build. Tracking the NEWEST bundle fixes the false "stale".
+  it("newest .webpack bundle is fresh after an incremental build where main.bundle.js lagged", function()
+    local uv = vim.uv or vim.loop
+    local wp, src = vim.fn.tempname(), vim.fn.tempname()
+    vim.fn.mkdir(wp, "p")
+    vim.fn.mkdir(src, "p")
+    local main = wp .. "/main.bundle.js"
+    local renderer = wp .. "/renderer.bundle.js"
+    local srcfile = src .. "/App.tsx"
+    for _, f in ipairs({ main, renderer, srcfile }) do
+      vim.fn.writefile({ "x" }, f)
+    end
+    -- main built long ago; source edited since; then an incremental build rewrote
+    -- ONLY renderer → main(1000) < src(2000) < renderer(3000).
+    uv.fs_utime(main, 1000, 1000)
+    uv.fs_utime(srcfile, 2000, 2000)
+    uv.fs_utime(renderer, 3000, 3000)
+    -- the fix selects the newest bundle (renderer), not the fixed main.bundle.js
+    assert.equals(renderer, pipeline.newest_bundle({ main, renderer }, vim.fn.getftime))
+    -- and the newest bundle is newer than the source → NOT stale (bug fixed)
+    assert.is_false(staleness.is_stale(renderer, { src }))
+    -- whereas the old artifact (main.bundle.js) would (wrongly) read stale
+    assert.is_true(staleness.is_stale(main, { src }))
+  end)
 end)
 
 describe("ledger.builder.pipeline", function()
@@ -65,6 +92,9 @@ describe("ledger.builder.pipeline", function()
       end,
       files_equal = function()
         return true
+      end,
+      desktop_bundle = function()
+        return "/repo/apps/ledger-live-desktop/.webpack/renderer.bundle.js"
       end,
     }, over or {})
   end
@@ -332,6 +362,56 @@ describe("ledger.builder.pipeline", function()
     local build = find(pipeline.steps("mobile", { platform_flag = "ios" }), "build")
     local path = pipeline.resolve_artifact(build, ctx())
     assert.equals("/repo/apps/ledger-live-mobile/ios/build/x.app", path)
+  end)
+
+  it("desktop build tracks the newest .webpack bundle via @desktop-bundle (not a lagging main.bundle.js)", function()
+    local build = find(pipeline.steps("desktop"), "build")
+    assert.equals("@desktop-bundle", build.artifact)
+    -- resolve_artifact defers to ctx.desktop_bundle() — the newest bundle's abs path
+    assert.equals("/repo/apps/ledger-live-desktop/.webpack/renderer.bundle.js", pipeline.resolve_artifact(build, ctx()))
+    -- newest bundle present + not stale → done
+    assert.equals("done", pipeline.status(build, ctx()))
+    -- a source newer than the newest bundle → needs_update
+    assert.equals(
+      "needs_update",
+      pipeline.status(
+        build,
+        ctx({
+          is_stale = function()
+            return true
+          end,
+        })
+      )
+    )
+    -- no bundle produced yet → missing
+    assert.equals(
+      "missing",
+      pipeline.status(
+        build,
+        ctx({
+          desktop_bundle = function()
+            return nil
+          end,
+        })
+      )
+    )
+  end)
+
+  it("newest_bundle picks the most-recently-written file (rspack rewrites only changed chunks)", function()
+    local mt = {
+      ["/wp/main.bundle.js"] = 100, -- rspack left this from an earlier build
+      ["/wp/renderer.bundle.js"] = 300, -- the chunk THIS build rewrote
+      ["/wp/9.renderer.bundle.js"] = 200,
+    }
+    assert.equals(
+      "/wp/renderer.bundle.js",
+      pipeline.newest_bundle(vim.tbl_keys(mt), function(f)
+        return mt[f]
+      end)
+    )
+    assert.is_nil(pipeline.newest_bundle({}, function()
+      return 0
+    end))
   end)
 
   it("mobile build label reflects the chosen detox config", function()
