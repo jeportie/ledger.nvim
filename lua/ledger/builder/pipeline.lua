@@ -60,7 +60,11 @@ M.desktop = {
     id = "build",
     label = "build:testing",
     template = "desktop.build.testing",
-    artifact = "apps/ledger-live-desktop/.webpack/main.bundle.js",
+    -- @desktop-bundle → the NEWEST .webpack/*.bundle.js. rspack's incremental
+    -- build rewrites only the chunks that changed, so a fixed main.bundle.js can
+    -- lag the source right after a successful build (false "needs update"); the
+    -- newest bundle reflects the actual last build. Resolved via ctx.desktop_bundle.
+    artifact = "@desktop-bundle",
     sources = { "apps/ledger-live-desktop/src", "apps/ledger-live-desktop/tools" },
   },
 }
@@ -191,8 +195,10 @@ function M.steps(platform, opts)
   return out
 end
 
--- Resolve a step's artifact to an absolute path (handles the @detox-binary
--- sentinel which depends on the active config).
+-- Resolve a step's artifact to an absolute path. Handles two sentinels: the
+-- @detox-binary (depends on the active config) and @desktop-bundle (the newest
+-- .webpack bundle). Both are resolved by the controller via ctx and injected, so
+-- this stays a pure function of ctx.
 function M.resolve_artifact(step, ctx)
   if not step.artifact or not ctx.root then
     return nil
@@ -201,7 +207,27 @@ function M.resolve_artifact(step, ctx)
     local rel = ctx.detox_binary(ctx.config)
     return rel and (ctx.root .. "/" .. rel) or nil
   end
+  if step.artifact == "@desktop-bundle" then
+    -- absolute path (or nil) of the newest .webpack bundle; the controller does
+    -- the glob so pipeline.status stays pure.
+    return ctx.desktop_bundle and ctx.desktop_bundle() or nil
+  end
   return ctx.root .. "/" .. step.artifact
+end
+
+-- Most-recently-written path from a list (by mtime), or nil if empty. rspack's
+-- incremental build rewrites only the chunks that changed, so the newest
+-- .webpack/*.bundle.js — not a fixed main.bundle.js — reflects the actual last
+-- build. `mtime_of(path) -> number|nil`. Pure; the controller supplies the glob.
+function M.newest_bundle(files, mtime_of)
+  local newest, best = nil, -1
+  for _, f in ipairs(files or {}) do
+    local m = mtime_of(f)
+    if m and m > best then
+      best, newest = m, f
+    end
+  end
+  return newest
 end
 
 -- Resolve a step's source dirs to absolute paths.
