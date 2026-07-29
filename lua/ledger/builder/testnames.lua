@@ -393,7 +393,12 @@ function M.parse_object_array(src, array_name)
   if type(src) ~= "string" then
     return nil
   end
-  local pat = array_name and ("const%s+" .. array_name .. "%s*=%s*%[(.-)%]%s*;") or "const%s+[%w_]+%s*=%s*%[(.-)%]%s*;"
+  -- Allow an optional TypeScript annotation between the name and `=`, e.g.
+  -- `const currencies: AddAccountTestCase[] = [...]` or `const a: Array<{…}> = [...]`.
+  -- `%f[^%w_]` pins the end of the array name (so a lookup for `swapMax` won't
+  -- match `swapMaxBalancePairs`), then `[^=]*` consumes the `: Type ` before `=`.
+  local pat = array_name and ("const%s+" .. array_name .. "%f[^%w_][^=]*=%s*%[(.-)%]%s*;")
+    or "const%s+[%w_]+[^=]*=%s*%[(.-)%]%s*;"
   local body = src:match(pat)
   if not body then
     return nil, {}
@@ -739,6 +744,11 @@ local DESKTOP_SHAPE_B = {
   { spec = "earn.v2.spec.ts", array = "coldStartCurrencies" },
   { spec = "earn.v2.spec.ts", array = "activePositionCurrencies" },
   { spec = "earn.v2.spec.ts", array = "ethProviders" },
+  -- currency-pair swap loops + the receive loop (all clean Shape-B: static array
+  -- of {…} + `for (const … of NAME)` + `${…currency.name}` title).
+  { spec = "send.swap.spec.ts", array = "swaps" }, -- Swap <from> to <to>
+  { spec = "entrypoint.swap.spec.ts", array = "swapMax" }, -- Swap max amount from <from> to <to>
+  { spec = "receive.address.spec.ts", array = "nativeAccounts" }, -- [<currency>] Receive
 }
 
 -- Resolve every Shape-A swap test name from a monorepo checkout at `root`.

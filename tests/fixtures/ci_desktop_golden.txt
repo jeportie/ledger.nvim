@@ -14,21 +14,52 @@ Hot start & Position - NEAR
 Hot start & Position - SOL
 Swap - 1inch flow
 Swap - OKX flow
+Swap Bitcoin to Ethereum
+Swap Bitcoin to Litecoin
+Swap Bitcoin to Solana
+Swap Bitcoin to Tether USD
+Swap Ethereum to Bitcoin
+Swap Ethereum to Polkadot
+Swap Ethereum to Solana
+Swap Ethereum to Tether USD
+Swap Hedera to XRP
+Swap Solana to Bitcoin
+Swap Solana to Ethereum
+Swap Tether USD to Bitcoin
+Swap Tether USD to Ethereum
+Swap Tether USD to Solana
+Swap USD Coin to Bitcoin
+Swap USD Coin to Ethereum
+Swap USD Coin to Solana
+Swap XRP to Bitcoin
+Swap XRP to USD Coin
+Swap max amount from Ethereum to Bitcoin
+Swap max amount from Tether USD to Bitcoin
 [Aleo] Add account
 [Algorand] Add account
 [Aptos] Add account
+[BNB Chain] Receive
 [Base] Add account
 [Bitcoin Cash] Add account
+[Bitcoin Cash] Receive
 [Bitcoin] Add account
+[Bitcoin] Receive
 [Cardano] Add account
 [Cosmos] Add account
+[Cosmos] Receive
 [Ethereum Classic] Add account
 [Ethereum] Add account
+[Ethereum] Receive
 [Gram] Add account
 [Polkadot] Add account
+[Polkadot] Receive
 [Solana] Add account
+[Solana] Receive
 [Stellar] Add account
 [Tezos] Add account
+[Tezos] Receive
 [Tron] Add account
+[Tron] Receive
 [XRP] Add account
+[XRP] Receive
 [Zcash] Add account

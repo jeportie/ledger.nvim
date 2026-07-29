@@ -528,6 +528,62 @@ describe("ledger.builder.testnames", function()
       assert.same({ "[Bitcoin] Add account", "[Ethereum] Add account" }, names)
     end)
 
+    it("tolerates a TS type annotation on the array decl (const currencies: T[] = […])", function()
+      local names = tn.resolve_desktop_from_sources({
+        currency = [[
+          static readonly BTC = new Currency("Bitcoin", "BTC", "bitcoin", A, []);
+          static readonly ETH = new Currency("Ethereum", "ETH", "ethereum", A, []);
+        ]],
+        specs = {
+          {
+            array = "currencies",
+            src = [[
+              const currencies: AddAccountTestCase[] = [
+                { currency: Currency.BTC, xrayTicket: "X" },
+                { currency: Currency.ETH, xrayTicket: "Y" },
+              ];
+              for (const currency of currencies) {
+                test(`[${currency.currency.name}] Add account`, () => {});
+              }
+            ]],
+          },
+        },
+      })
+      assert.same({ "[Bitcoin] Add account", "[Ethereum] Add account" }, names)
+    end)
+
+    it("resolves a destructured swap-pair loop → 'Swap <from> to <to>' (send.swap shape)", function()
+      local names = tn.resolve_desktop_from_sources({
+        currency = [[
+          static readonly ETH = new Currency("Ethereum", "ETH", "ethereum", A, []);
+          static readonly BTC = new Currency("Bitcoin", "BTC", "bitcoin", A, []);
+        ]],
+        account = [[
+          static readonly ETH_1 = new Account(Currency.ETH, "Ethereum 1", 0);
+          static readonly BTC_NATIVE_SEGWIT_1 = new Account(Currency.BTC, "Bitcoin 1", 0);
+        ]],
+        specs = {
+          {
+            array = "swaps",
+            src = [[
+              const swaps = [
+                { fromAccount: Account.ETH_1, toAccount: Account.BTC_NATIVE_SEGWIT_1, xrayTicket: "X", tag: [...T] },
+                { fromAccount: Account.BTC_NATIVE_SEGWIT_1, toAccount: Account.ETH_1, xrayTicket: "Y", tag: [...T] },
+              ];
+              for (const { fromAccount, toAccount, xrayTicket, tag } of swaps) {
+                test(
+                  `Swap ${fromAccount.currency.name} to ${toAccount.currency.name}`,
+                  { tag: tag },
+                  async () => {},
+                );
+              }
+            ]],
+          },
+        },
+      })
+      assert.same({ "Swap Bitcoin to Ethereum", "Swap Ethereum to Bitcoin" }, names)
+    end)
+
     it("resolves a direct-literal title outside the loop (Aleo case)", function()
       local names = tn.resolve_desktop_from_sources({
         currency = 'static readonly ALEO = new Currency("Aleo", "ALEO", "aleo", A, []);',
@@ -997,26 +1053,25 @@ runIceColdStartTest(testConfig.account, testConfig.tmsLinks, testConfig.tags);
       return golden
     end
 
-    it("resolve_desktop matches the CI golden set exactly (or skips)", function()
+    it("resolves every CI golden name (superset OK; catches coverage regressions)", function()
       if not have_monorepo then
         pending("monorepo not present at " .. ROOT .. " (set LEDGER_LIVE_ROOT)")
         return
       end
-      local names = tn.resolve_desktop(ROOT)
-      local golden = load_golden()
-
-      -- Compared as a SET (order is not load-bearing; the fixture is byte-sorted
-      -- like the resolver's output but the assertion doesn't depend on it). The
-      -- golden covers every Shape-B spec: provider.swap + add.account + earn.v2.
       local got = {}
-      for _, n in ipairs(names) do
+      for _, n in ipairs(tn.resolve_desktop(ROOT)) do
         got[n] = true
       end
-      for _, n in ipairs(names) do
-        assert.is_true(golden[n] == true, "resolved name not in desktop golden set: " .. n)
-      end
-      for g in pairs(golden) do
-        assert.is_true(got[g] == true, "golden name not produced by resolver: " .. g)
+      -- Every golden name must STILL resolve — catches a coverage regression (e.g. a
+      -- spec's array gaining a `: Type[]` annotation the parser couldn't read). The
+      -- reverse (resolved ⊆ golden) is intentionally NOT asserted: the resolver may
+      -- legitimately produce MORE than the snapshot (new DESKTOP_SHAPE_B specs, or a
+      -- newer checkout), so the old exact set-equality went stale the moment the
+      -- local checkout switched branches. If a golden name below no longer resolves,
+      -- it's either a regression or you're on a branch without that spec — in the
+      -- latter case regenerate ci_desktop_golden.txt.
+      for g in pairs(load_golden()) do
+        assert.is_true(got[g] == true, "golden name no longer produced by resolver: " .. g)
       end
     end)
 
