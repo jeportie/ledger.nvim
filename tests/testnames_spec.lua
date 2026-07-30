@@ -584,6 +584,38 @@ describe("ledger.builder.testnames", function()
       assert.same({ "Swap Bitcoin to Ethereum", "Swap Ethereum to Bitcoin" }, names)
     end)
 
+    it("resolves a BARE enum-ref array loop → '${provider.uiName}' (crossAccount shape)", function()
+      local names = tn.resolve_desktop_from_sources({
+        provider = [[
+          static readonly ONE_INCH = new SwapProvider("oneinch", "1inch", false, true);
+          static readonly VELORA = new SwapProvider("velora", "Velora", false, false);
+          static readonly OKX = new SwapProvider("okx", "OKX", false, false);
+        ]],
+        specs = {
+          {
+            array = "dexProviders",
+            src = [[
+              const dexProviders = [
+                SwapProvider.ONE_INCH,
+                SwapProvider.VELORA,
+                SwapProvider.OKX,
+              ];
+              test.describe("Swap cross account warning", () => {
+                for (const provider of dexProviders) {
+                  test(`A warning should be visible for a cross account swap with ${provider.uiName}`, () => {});
+                }
+              });
+            ]],
+          },
+        },
+      })
+      assert.same({
+        "A warning should be visible for a cross account swap with 1inch",
+        "A warning should be visible for a cross account swap with OKX",
+        "A warning should be visible for a cross account swap with Velora",
+      }, names)
+    end)
+
     it("resolves a direct-literal title outside the loop (Aleo case)", function()
       local names = tn.resolve_desktop_from_sources({
         currency = 'static readonly ALEO = new Currency("Aleo", "ALEO", "aleo", A, []);',
