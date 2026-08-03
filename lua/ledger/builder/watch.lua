@@ -141,17 +141,48 @@ function M.on_save(abspath)
   end, 400)
 end
 
--- Build a specific nx project (current file's / picked / by filter). Runs through
--- the Builder as a sub-step under `libs`, so status + logs update like any step.
+-- Git-changed files that belong to a buildable nx project, as
+-- `{ { file = "<repo-rel>", project = "<nx name>" }, … }` (deduped by file, in git
+-- order). Powers the "rebuild a modified file" action — the manual companion to
+-- on-save, for files edited OUTSIDE this nvim (which the BufWritePost autocmd
+-- can't see). `git_lines(root)` returns `git status --porcelain` lines and
+-- `project_of(root, abspath)` maps a file to its buildable project — both
+-- injectable for tests. Deletions are skipped (nothing to rebuild).
+function M.modified_buildable(root, git_lines, project_of)
+  local out, seen = {}, {}
+  for _, line in ipairs(git_lines(root) or {}) do
+    local status, rel = line:match("^(..)%s+(.+)$")
+    if rel and not status:find("D", 1, true) then
+      rel = rel:gsub('^"', ""):gsub('"$', "") -- unquote paths git quotes (spaces/utf8)
+      if not seen[rel] then
+        local proj = project_of(root, root .. "/" .. rel)
+        if proj then
+          seen[rel] = true
+          out[#out + 1] = { file = rel, project = proj }
+        end
+      end
+    end
+  end
+  return out
+end
+
+-- Build a specific nx project (current file's / a modified file's / picked / by
+-- filter). Runs through the Builder as a sub-step under `libs`, so status + logs
+-- update like any step.
 function M.target_menu()
   local state = ctx.get_state()
   if not state.root then
     return
   end
+  local nx = require("ledger.builder.nx")
+  local function build_project(p)
+    M.add_substep("libs", { template = "shared.nx.build", label = p, projects = { p } })
+  end
   ctx.open_menu(
     "Build a project",
     {
       "Build current file's project",
+      "Rebuild a modified file…",
       "Build project…",
       "Build by filter…",
     },
@@ -159,16 +190,36 @@ function M.target_menu()
     function(c)
       if c == "Build current file's project" then
         local f = vim.fn.expand("#:p") -- the file edited before the Builder took focus
-        local proj = f ~= "" and require("ledger.builder.nx").project_for_file(state.root, f) or nil
+        local proj = f ~= "" and nx.project_for_file(state.root, f) or nil
         if not proj then
           vim.notify("Builder: the previous buffer isn't inside an nx project", vim.log.levels.WARN)
           return
         end
-        M.add_substep("libs", { template = "shared.nx.build", label = proj, projects = { proj } })
-      elseif c == "Build project…" then
-        ctx.pick_project(state.root, "Build nx project:", function(p)
-          M.add_substep("libs", { template = "shared.nx.build", label = p, projects = { p } })
+        build_project(proj)
+      elseif c == "Rebuild a modified file…" then
+        -- manual rebuild for files changed OUTSIDE this nvim (git-tracked): the
+        -- on-save autocmd only sees this instance's writes, so offer the changed
+        -- files → their nx project. `--no-renames` keeps the porcelain path simple.
+        local mods = M.modified_buildable(state.root, function(root)
+          return vim.fn.systemlist({ "git", "-C", root, "status", "--porcelain", "--no-renames" })
+        end, nx.buildable_project_for_file)
+        if #mods == 0 then
+          vim.notify("Builder: no modified files in a buildable nx project", vim.log.levels.INFO)
+          return
+        end
+        local items, project_of_item = {}, {}
+        for _, m in ipairs(mods) do
+          local disp = m.file .. "  →  " .. m.project
+          items[#items + 1] = disp
+          project_of_item[disp] = m.project
+        end
+        ctx.open_menu("Rebuild a modified file", items, nil, function(pick)
+          if project_of_item[pick] then
+            build_project(project_of_item[pick])
+          end
         end)
+      elseif c == "Build project…" then
+        ctx.pick_project(state.root, "Build nx project:", build_project)
       elseif c == "Build by filter…" then
         vim.ui.input({ prompt = "Build -p filter: " }, function(f)
           if f and f ~= "" then

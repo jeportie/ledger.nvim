@@ -100,4 +100,35 @@ describe("ledger.builder.watch", function()
     assert.is_false(state.watching)
     assert.is_false(running) -- daemon stopped
   end)
+
+  it("modified_buildable maps git-changed files to their buildable nx projects", function()
+    local git_lines = function()
+      return {
+        " M libs/live-e2e-shared/src/speculos.ts",
+        "?? apps/ledger-live-desktop/src/new.tsx",
+        " D libs/live-e2e-shared/src/gone.ts", -- deletion → not a rebuild target
+        "M  package.json", -- not inside any nx project
+        " M libs/live-e2e-shared/src/enum/Account.ts", -- same project as speculos
+      }
+    end
+    local project_of = function(_, abspath)
+      if abspath:find("live-e2e-shared", 1, true) then
+        return "@ledgerhq/live-e2e-shared"
+      elseif abspath:find("ledger-live-desktop", 1, true) then
+        return "ledger-live-desktop"
+      end
+      return nil -- package.json → no project
+    end
+    local mods = watch.modified_buildable("/repo", git_lines, project_of)
+    local by_file = {}
+    for _, m in ipairs(mods) do
+      by_file[m.file] = m.project
+    end
+    assert.equals("@ledgerhq/live-e2e-shared", by_file["libs/live-e2e-shared/src/speculos.ts"])
+    assert.equals("@ledgerhq/live-e2e-shared", by_file["libs/live-e2e-shared/src/enum/Account.ts"])
+    assert.equals("ledger-live-desktop", by_file["apps/ledger-live-desktop/src/new.tsx"])
+    assert.is_nil(by_file["package.json"]) -- no project → excluded
+    assert.is_nil(by_file["libs/live-e2e-shared/src/gone.ts"]) -- deletion → excluded
+    assert.equals(3, #mods)
+  end)
 end)
