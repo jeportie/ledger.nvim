@@ -857,7 +857,7 @@ function M.help_shortcuts()
     row("A", "run-all menu", "Run all outdated steps · Clean + reinstall"),
     row("↓ ⏎", "run tests", "focus the Run-tests row · active when READY"),
     row("w", "watch menu", "on-save · nx daemon · off"),
-    row("t", "build a project", "current file / picked / filter"),
+    row("t", "build a project", "current file / modified file / picked / filter"),
     row("z", "fold sub-steps", "show / hide per-project rebuilds"),
     row("B", "build", "→ desktop build:* / detox e2e:build"),
     row("o", "run app menu", "Dev / Production (desktop) · Dev / Staging (mobile)"),
