@@ -404,10 +404,16 @@ function M.parse_object_array(src, array_name)
     return nil, {}
   end
   local elements = {}
-  -- Each top-level `{ … }` is one element. Object literals here don't nest
-  -- braces (they hold enum refs, strings, arrays), so a non-greedy `{(.-)}`
-  -- captures one element's fields at a time.
+  -- Two element forms:
+  --   * object literal `{ field: Class.SYM, … }` — one element per top-level `{…}`.
+  --   * BARE enum ref `Class.SYM` — a whole element that IS the ref (e.g.
+  --     `const dexProviders = [SwapProvider.ONE_INCH, …]`). Stored under the
+  --     `__self` sentinel so resolve_accessor can treat the loop var as the ref.
+  -- Object literals here don't nest braces, so a non-greedy `{(.-)}` captures one
+  -- element's fields at a time; bare refs are matched only OUTSIDE those braces.
+  local brace_body = {}
   for obj in body:gmatch("{(.-)}") do
+    brace_body[#brace_body + 1] = obj
     local fields = {}
     for key, class, sym in obj:gmatch("([%w_]+)%s*:%s*([%w_]+)%.([%w_]+)") do
       if ENUM_CLASSES[class] then
@@ -416,6 +422,15 @@ function M.parse_object_array(src, array_name)
     end
     if next(fields) then
       elements[#elements + 1] = fields
+    end
+  end
+  -- Bare refs: scan the body with the object literals stripped out, so a
+  -- `field: Class.SYM` inside a `{…}` isn't double-counted as a bare element.
+  if #brace_body == 0 then
+    for class, sym in body:gmatch("([%w_]+)%.([%w_]+)") do
+      if ENUM_CLASSES[class] then
+        elements[#elements + 1] = { __self = { class = class, sym = sym } }
+      end
     end
   end
   return array_name or true, elements
@@ -573,6 +588,15 @@ local function resolve_accessor(enums, binding, element, acc)
     local sym = path[1]
     local leaf = path[#path]
     return resolve_enum_leaf(enums, head, sym, leaf)
+  end
+
+  -- Bare-ref element (`const arr = [Class.SYM, …]`): the loop var IS the ref, so
+  -- `${provider.uiName}` → head is the loop var, path is the leaf chain.
+  if binding.kind == "ident" and element and element.__self then
+    if head ~= binding.var or not path[1] then
+      return nil
+    end
+    return resolve_enum_leaf(enums, element.__self.class, element.__self.sym, path[#path])
   end
 
   -- Loop-bound accessor. Determine which field of the element the ref lives in
@@ -749,6 +773,8 @@ local DESKTOP_SHAPE_B = {
   { spec = "send.swap.spec.ts", array = "swaps" }, -- Swap <from> to <to>
   { spec = "entrypoint.swap.spec.ts", array = "swapMax" }, -- Swap max amount from <from> to <to>
   { spec = "receive.address.spec.ts", array = "nativeAccounts" }, -- [<currency>] Receive
+  -- bare enum-ref array (elements are `SwapProvider.X`, not `{…}`).
+  { spec = "crossAccount.warning.swap.spec.ts", array = "dexProviders" }, -- …swap with <uiName>
 }
 
 -- Resolve every Shape-A swap test name from a monorepo checkout at `root`.

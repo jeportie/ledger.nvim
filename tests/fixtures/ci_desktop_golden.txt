@@ -1,3 +1,7 @@
+A warning should be visible for a cross account swap with 1inch
+A warning should be visible for a cross account swap with OKX
+A warning should be visible for a cross account swap with Uniswap
+A warning should be visible for a cross account swap with Velora
 Cold start - ATOM
 Cold start - ETH
 ETH staking flow - kiln_pooling
